@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 840" width="420" height="840">
+  <!-- Green Teardrop Spire of Pesantren Al-Andalus -->
+  <path
+    d="M 210 10
+       C 222 140, 265 320, 330 460
+       C 372 550, 385 615, 362 668
+       C 334 732, 276 756, 210 756
+       C 144 756, 86 732, 58 668
+       C 35 615, 48 550, 90 460
+       C 155 320, 198 140, 210 10 Z"
+    fill="#094226"
+  />
+
+  <!-- Yellow Arabic Calligraphy (الأندلس) Inside Teardrop -->
+  <g fill="#F4E600">
+    <!-- Center-right tall Alif/Lam spire -->
+    <path d="M 214 140 L 234 270 L 222 278 L 228 450 L 210 450 L 208 240 Z" />
+    <!-- Right Alif spire -->
+    <path d="M 244 265 L 266 365 L 254 372 L 262 515 L 244 515 L 240 340 Z" />
+    <!-- Left Lam spire -->
+    <path d="M 188 265 L 204 345 L 200 475 L 182 475 L 184 348 L 166 365 Z" />
+
+    <!-- Sweeping outer yellow crescent cradle at base of teardrop -->
+    <path
+      d="M 96 520
+         C 78 605, 118 690, 210 692
+         C 286 692, 326 636, 306 555
+         C 292 500, 268 475, 250 475
+         C 278 518, 286 575, 268 616
+         C 250 656, 198 664, 156 638
+         C 118 614, 102 568, 96 520 Z"
+    />
+
+    <!-- Inner Arabic Sin / Dal / Nun / Waw curves (الأندلس) -->
+    <path
+      d="M 186 420
+         C 145 455, 118 510, 128 572
+         C 138 625, 186 648, 232 626
+         C 258 614, 268 580, 252 552
+         C 238 528, 206 534, 198 558
+         C 192 576, 204 596, 224 596
+         C 214 610, 184 610, 166 590
+         C 148 570, 152 525, 182 492
+         L 218 455 Z"
+    />
+
+    <!-- Central Nun / Dal loop & dot -->
+    <path
+      d="M 172 528
+         C 188 505, 216 508, 226 530
+         C 234 548, 220 572, 196 572
+         C 176 572, 162 550, 172 528 Z"
+    />
+    <circle cx="242" cy="492" r="11" />
+  </g>
+
+  <!-- Crimson Red "Al - Andalus" Script Along Bottom Contour -->
+  <g fill="#E12529" font-family="Georgia, 'Times New Roman', serif" font-weight="bold" font-style="italic">
+    <text x="26" y="760" font-size="68" transform="rotate(-18 60 750)">Al</text>
+    <text x="108" y="792" font-size="62" transform="rotate(-5 120 790)">-</text>
+    <text x="155" y="822" font-size="68" transform="rotate(-8 260 800)">Andalus</text>
+  </g>
+</svg>

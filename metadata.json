@@ -1,0 +1,6 @@
+{
+  "name": "Portal Lapor Sakit Santri - Asrama Al Andalus",
+  "description": "Portal pelaporan santri sakit untuk Musyrif Asrama Al Andalus terintegrasi dengan Master Data Google Sheets dan sinkronisasi otomatis tindakan UKP (syncStatusUKP).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
