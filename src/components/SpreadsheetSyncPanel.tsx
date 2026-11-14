@@ -1,14 +1,14 @@
-import React, { useState } from 'react';
-import Swal from 'sweetalert2';
+import React, { useState, useMemo } from 'react';
 import {
   Table,
-  Plus,
   CheckCircle2,
   Clock,
   Stethoscope,
   Users,
   FileSpreadsheet,
   KeyRound,
+  Trash2,
+  Home,
 } from 'lucide-react';
 import {
   type MasterSantri,
@@ -18,8 +18,10 @@ import {
   type DateRangeFilter,
   type UserRoleRow,
   filterLaporanByDateRange,
-  getTodayDateISO,
+  findDuplicateLaporanKeys,
+  getLaporanRowKey,
 } from '../utils/ukpSyncEngine';
+import { type PerizinanRow } from '../utils/perizinanEngine';
 import { type ReportStatusFilter } from './ReportOverview';
 
 interface SpreadsheetSyncPanelProps {
@@ -41,6 +43,8 @@ interface SpreadsheetSyncPanelProps {
   onUpdateUserPassword: (namaUser: string, newPassword: string) => void;
   onAddUserRole: (newUser: UserRoleRow) => void;
   hideUsersRoleTab?: boolean;
+  onDeleteLaporan?: (row: LaporanMusyrifRow) => void;
+  perizinanList?: PerizinanRow[];
 }
 
 export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
@@ -53,41 +57,19 @@ export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
   onStatusFilterChange,
   dateRange,
   onUpdateUKPTindakan,
-  onAddUKPRow,
-  onAddMasterSantri,
   onUpdateUserPassword,
-  onAddUserRole,
   hideUsersRoleTab = false,
+  onDeleteLaporan,
+  perizinanList = [],
 }) => {
   const [activeSheet, setActiveSheet] = useState<
-    'Laporan_Musyrif' | 'Data_UKP' | 'Master_Data' | 'users_role'
+    'Laporan_Musyrif' | 'Data_UKP' | 'Master_Data' | 'users_role' | 'Perizinan'
   >('Laporan_Musyrif');
 
-  // State form tambah baris Data_UKP (Simulasi IMPORTRANGE UKP)
-  const [ukpNama, setUkpNama] = useState<string>(
-    masterData[3]?.namaSantri || 'Bilal Rabbani Putra'
+  const duplicateKeys = useMemo(
+    () => findDuplicateLaporanKeys(laporanList),
+    [laporanList]
   );
-  const [ukpTanggal, setUkpTanggal] = useState<string>(() => getTodayDateISO());
-  const [ukpKeluhan, setUkpKeluhan] = useState<string>(
-    'Nyeri ulu hati dan mual'
-  );
-  const [ukpTindakan, setUkpTindakan] = useState<string>(
-    'Pemberian Antasida Doen & Istirahat Observasi UKP'
-  );
-
-  // State form tambah Master_Data
-  const [newNama, setNewNama] = useState<string>('');
-  const [newKelas, setNewKelas] = useState<string>('');
-  const [newKamar, setNewKamar] = useState<string>('');
-  const [newIdSantri, setNewIdSantri] = useState<string>('');
-
-  // State form tambah users_role
-  const [newRoleUserNama, setNewRoleUserNama] = useState<string>('');
-  const [newRoleUserType, setNewRoleUserType] = useState<
-    'user' | 'admin_pengasuhan' | 'admin_pusat'
-  >('user');
-  const [newRoleUserPassword, setNewRoleUserPassword] = useState<string>('');
-  const [newRoleUserKet, setNewRoleUserKet] = useState<string>('');
 
   const dateFilteredLaporan = filterLaporanByDateRange(laporanList, dateRange);
   const waitingCount = dateFilteredLaporan.filter(
@@ -102,73 +84,6 @@ export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
     if (statusFilter === 'DONE') return !isWaiting;
     return true;
   });
-
-  const handleAddUkpSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!ukpNama.trim()) return;
-    onAddUKPRow({
-      tanggalPemeriksaan: ukpTanggal || getTodayDateISO(),
-      nama: ukpNama.trim(),
-      keluhan: ukpKeluhan.trim() || 'Pemeriksaan UKP',
-      tindakan: ukpTindakan.trim(),
-    });
-    Swal.fire({
-      icon: 'success',
-      title: 'Baris Data_UKP Ditambahkan',
-      text: `Baris baru untuk ${ukpNama} ditambahkan di bagian paling bawah (Bottom) sheet Data_UKP.`,
-      confirmButtonColor: '#047857',
-    });
-  };
-
-  const handleAddMasterSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newNama.trim() || !newKelas.trim() || !newKamar.trim()) return;
-    const generatedId =
-      newIdSantri.trim() ||
-      `AND-2026-${String(masterData.length + 1).padStart(3, '0')}`;
-    onAddMasterSantri({
-      namaSantri: newNama.trim(),
-      kelas: newKelas.trim(),
-      kamar: newKamar.trim(),
-      idSantri: generatedId,
-    });
-    setNewNama('');
-    setNewKelas('');
-    setNewKamar('');
-    setNewIdSantri('');
-    Swal.fire({
-      icon: 'success',
-      title: 'Santri Ditambahkan ke Master_Data',
-      text: `${newNama} (${generatedId}) kini tersedia di pencarian Autocomplete Musyrif.`,
-      confirmButtonColor: '#047857',
-    });
-  };
-
-  const handleAddUserRoleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newRoleUserNama.trim() || !newRoleUserPassword.trim()) return;
-    onAddUserRole({
-      namaUser: newRoleUserNama.trim(),
-      role: newRoleUserType,
-      password: newRoleUserPassword.trim(),
-      keterangan:
-        newRoleUserKet.trim() ||
-        (newRoleUserType === 'admin_pusat'
-          ? 'Admin Pusat (Akses Penuh & Kode Script)'
-          : newRoleUserType === 'admin_pengasuhan'
-          ? 'Admin Pengasuhan'
-          : 'Musyrif Asrama'),
-    });
-    setNewRoleUserNama('');
-    setNewRoleUserPassword('');
-    setNewRoleUserKet('');
-    Swal.fire({
-      icon: 'success',
-      title: 'Akun Ditambahkan ke Sheet users_role',
-      text: `Akun ${newRoleUserNama} (${newRoleUserType}) siap digunakan pada halaman Login.`,
-      confirmButtonColor: '#0B4627',
-    });
-  };
 
   return (
     <div className="space-y-5">
@@ -243,6 +158,22 @@ export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
                   <span>4. users_role ({usersRoleList.length})</span>
                 </button>
               )}
+
+              <button
+                type="button"
+                role="tab"
+                data-testid="tab-sheet-perizinan"
+                aria-selected={activeSheet === 'Perizinan'}
+                onClick={() => setActiveSheet('Perizinan')}
+                className={`min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+                  activeSheet === 'Perizinan'
+                    ? 'bg-white text-emerald-800 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Home className="w-3.5 h-3.5 shrink-0" />
+                <span>5. Perizinan ({perizinanList.length})</span>
+              </button>
             </div>
 
             {activeSheet === 'Laporan_Musyrif' && (
@@ -298,13 +229,16 @@ export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
                     <th className="py-2.5 px-3">
                       Kol L/N/O · Status_Penanganan & Tindakan UKP
                     </th>
+                    {onDeleteLaporan && (
+                      <th className="py-2.5 px-3 text-right">Aksi</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-xs">
                   {filteredLaporan.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={4}
+                        colSpan={onDeleteLaporan ? 5 : 4}
                         className="py-8 text-center text-slate-500"
                       >
                         Tidak ada baris laporan pada filter ini.
@@ -315,10 +249,14 @@ export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
                       const isWaiting =
                         row.statusPenanganan.trim().toUpperCase() ===
                         'MENUNGGU PENANGANAN';
+                      const rowKey = getLaporanRowKey(row);
+                      const isDup = duplicateKeys.has(rowKey);
                       return (
                         <tr
                           key={`${row.idLaporan}-${row.idSantri}-${idx}`}
-                          className="hover:bg-slate-50/80 transition align-top"
+                          className={`hover:bg-slate-50/80 transition align-top ${
+                            isDup ? 'bg-rose-50/40' : ''
+                          }`}
                         >
                           <td className="py-3 px-3 font-mono text-slate-700 whitespace-nowrap tabular-nums">
                             <div className="font-semibold text-slate-900">
@@ -337,8 +275,15 @@ export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
                             )}
                           </td>
                           <td className="py-3 px-3">
-                            <div className="font-semibold text-slate-900">
-                              {row.namaSantri}
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-semibold text-slate-900">
+                                {row.namaSantri}
+                              </span>
+                              {isDup && (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 border border-rose-300">
+                                  DOUBLE INPUT
+                                </span>
+                              )}
                             </div>
                             <div className="text-slate-600 mt-0.5">
                               {row.kelas} · {row.kamar}
@@ -374,6 +319,19 @@ export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
                               </div>
                             )}
                           </td>
+                          {onDeleteLaporan && (
+                            <td className="py-3 px-3 text-right">
+                              <button
+                                type="button"
+                                data-testid={`btn-delete-sheet-laporan-${idx}`}
+                                onClick={() => onDeleteLaporan(row)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-200 hover:border-rose-600 text-[11px] font-bold transition cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>Hapus</span>
+                              </button>
+                            </td>
+                          )}
                         </tr>
                       );
                     })
@@ -392,8 +350,7 @@ export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
                 Catatan IMPORTRANGE & Pencarian Bottom-Up (Baris Terbawah ke Atas):
               </p>
               <p className="mt-0.5 text-slate-600">
-                Ubah isi kolom <strong>Tindakan (Kolom P)</strong> pada tabel di bawah atau tambahkan baris pemeriksaan UKP baru di bagian paling bawah, lalu klik tombol{' '}
-                <strong>Jalankan syncStatusUKP()</strong> untuk menguji pembaruan status otomatis.
+                Data pemeriksaan di bawah ditarik dari sheet <strong>Data_UKP</strong> dan dicocokkan secara persis berdasarkan <strong>Nama Santri</strong> serta <strong>Tanggal Pemeriksaan = Tanggal Laporan</strong> yang sama.
               </p>
             </div>
 
@@ -408,7 +365,7 @@ export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
                     <th className="py-2.5 px-3">Kol E · Nama</th>
                     <th className="py-2.5 px-3">Kol G · Keluhan</th>
                     <th className="py-2.5 px-3">
-                      Kol P · Tindakan (Dapat Diedit untuk Uji Sync)
+                      Kol P · Tindakan
                     </th>
                   </tr>
                 </thead>
@@ -452,107 +409,6 @@ export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
                 </tbody>
               </table>
             </div>
-
-            {/* Form Simulasi Tambah Baris Baru di Data_UKP (Paling Bawah) */}
-            <form
-              onSubmit={handleAddUkpSubmit}
-              className="rounded-2xl bg-stone-50 border border-slate-200/80 p-4 space-y-3"
-            >
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                  <Plus className="w-4 h-4 text-emerald-700" />
-                  <span>
-                    Simulasikan Data Baru Masuk ke Data_UKP (Baris Paling Bawah)
-                  </span>
-                </h4>
-                <span className="text-[11px] text-slate-500 font-mono">
-                  IMPORTRANGE Simulator
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-                <div>
-                  <label
-                    htmlFor="sim-ukp-tanggal"
-                    className="block text-[11px] font-medium text-slate-600 mb-1"
-                  >
-                    Kol D · Tanggal_Pemeriksaan
-                  </label>
-                  <input
-                    id="sim-ukp-tanggal"
-                    type="date"
-                    value={ukpTanggal}
-                    onChange={(e) => setUkpTanggal(e.target.value)}
-                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-mono"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="sim-ukp-nama"
-                    className="block text-[11px] font-medium text-slate-600 mb-1"
-                  >
-                    Kol E · Nama Santri
-                  </label>
-                  <select
-                    id="sim-ukp-nama"
-                    value={ukpNama}
-                    onChange={(e) => setUkpNama(e.target.value)}
-                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs"
-                  >
-                    {masterData.map((s, idx) => (
-                      <option
-                        key={`${s.idSantri}-${s.namaSantri}-${idx}`}
-                        value={s.namaSantri}
-                      >
-                        {s.namaSantri}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label
-                    htmlFor="sim-ukp-keluhan"
-                    className="block text-[11px] font-medium text-slate-600 mb-1"
-                  >
-                    Kol G · Keluhan
-                  </label>
-                  <input
-                    id="sim-ukp-keluhan"
-                    type="text"
-                    value={ukpKeluhan}
-                    onChange={(e) => setUkpKeluhan(e.target.value)}
-                    placeholder="Keluhan saat diperiksa"
-                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="sim-ukp-tindakan"
-                    className="block text-[11px] font-medium text-slate-600 mb-1"
-                  >
-                    Kol P · Tindakan UKP
-                  </label>
-                  <input
-                    id="sim-ukp-tindakan"
-                    type="text"
-                    value={ukpTindakan}
-                    onChange={(e) => setUkpTindakan(e.target.value)}
-                    placeholder="Contoh: Rawat UKP & Obat Maag"
-                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs"
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-end">
-                <button
-                  type="submit"
-                  className="min-h-[38px] px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Tambah ke Baris Terbawah Data_UKP</span>
-                </button>
-              </div>
-            </form>
           </div>
         )}
 
@@ -598,62 +454,6 @@ export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
                 </tbody>
               </table>
             </div>
-
-            <form
-              onSubmit={handleAddMasterSubmit}
-              className="rounded-2xl bg-stone-50 border border-slate-200/80 p-4 space-y-3"
-            >
-              <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                <Plus className="w-4 h-4 text-emerald-700" />
-                <span>Tambah Santri Baru ke Sheet Master_Data</span>
-              </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
-                <input
-                  type="text"
-                  aria-label="Nama Santri Baru"
-                  value={newNama}
-                  onChange={(e) => setNewNama(e.target.value)}
-                  placeholder="Nama_Santri (Kolom A)"
-                  required
-                  className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs"
-                />
-                <input
-                  type="text"
-                  aria-label="Kelas Santri Baru"
-                  value={newKelas}
-                  onChange={(e) => setNewKelas(e.target.value)}
-                  placeholder="Kelas (Kolom B) mis. X IPA 2"
-                  required
-                  className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs"
-                />
-                <input
-                  type="text"
-                  aria-label="Kamar Santri Baru"
-                  value={newKamar}
-                  onChange={(e) => setNewKamar(e.target.value)}
-                  placeholder="Daftar_Kamar (Kolom F)"
-                  required
-                  className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs"
-                />
-                <input
-                  type="text"
-                  aria-label="ID Santri Baru"
-                  value={newIdSantri}
-                  onChange={(e) => setNewIdSantri(e.target.value)}
-                  placeholder="ID_Santri (Kolom G, opsional)"
-                  className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-mono"
-                />
-              </div>
-              <div className="flex justify-end">
-                <button
-                  type="submit"
-                  className="min-h-[38px] px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Simpan ke Master_Data</span>
-                </button>
-              </div>
-            </form>
           </div>
         )}
 
@@ -720,70 +520,90 @@ export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
 
-            <form
-              onSubmit={handleAddUserRoleSubmit}
-              className="rounded-2xl bg-stone-50 border border-slate-200/80 p-4 space-y-3"
-            >
-              <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                <Plus className="w-4 h-4 text-emerald-700" />
-                <span>Tambah Akun Baru ke Sheet users_role</span>
-              </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
-                <input
-                  type="text"
-                  value={newRoleUserNama}
-                  onChange={(e) => setNewRoleUserNama(e.target.value)}
-                  placeholder="Nama (Kolom nama)"
-                  required
-                  className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs"
-                />
-                <select
-                  value={newRoleUserType}
-                  onChange={(e) =>
-                    setNewRoleUserType(
-                      e.target.value as
-                        | 'user'
-                        | 'admin_pengasuhan'
-                        | 'admin_pusat'
-                    )
-                  }
-                  className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium"
-                >
-                  <option value="user">Role: user (Musyrif)</option>
-                  <option value="admin_pengasuhan">
-                    Role: admin_pengasuhan (Admin Pengasuhan)
-                  </option>
-                  <option value="admin_pusat">
-                    Role: admin_pusat (Admin Pusat &amp; Kode.gs)
-                  </option>
-                </select>
-                <input
-                  type="text"
-                  value={newRoleUserPassword}
-                  onChange={(e) => setNewRoleUserPassword(e.target.value)}
-                  placeholder="Password (Kolom C)"
-                  required
-                  className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-mono"
-                />
-                <input
-                  type="text"
-                  value={newRoleUserKet}
-                  onChange={(e) => setNewRoleUserKet(e.target.value)}
-                  placeholder="Keterangan Asrama (Kolom D)"
-                  className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs"
-                />
-              </div>
-              <div className="flex justify-end">
-                <button
-                  type="submit"
-                  className="min-h-[38px] px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Simpan ke Sheet users_role</span>
-                </button>
-              </div>
-            </form>
+        {/* SHEET 5: PERIZINAN (23 Kolom A-W) */}
+        {activeSheet === 'Perizinan' && (
+          <div className="space-y-4" data-testid="sheet-perizinan-panel">
+            <div className="text-xs text-slate-600 bg-emerald-50/60 border border-emerald-200/80 rounded-2xl p-3.5">
+              <p className="font-semibold text-emerald-950">
+                Sheet <span className="font-mono">Perizinan</span> (23 Kolom A–W · Perizinan Pulang Santri):
+              </p>
+              <p className="mt-0.5 text-slate-600">
+                Menampilkan data riwayat izin pulang santri yang valid (mengabaikan baris kosong/rumus template). Untuk mencetak surat izin atau mencatat izin baru, buka tab <strong>🏠 Izin Pulang &amp; Surat Izin</strong> di atas.
+              </p>
+            </div>
+
+            <div className="overflow-x-auto rounded-2xl border border-slate-200">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-600">
+                    <th className="py-2.5 px-3 font-mono">Kol A · No</th>
+                    <th className="py-2.5 px-3">Kol B/C/D/E · Nama, Kelas, Gedung &amp; Kamar</th>
+                    <th className="py-2.5 px-3">Kol F/G/H/I · Izin, Keterangan, Tujuan &amp; Rekomendasi</th>
+                    <th className="py-2.5 px-3 font-mono">Kol J–P · Waktu Izin &amp; Durasi</th>
+                    <th className="py-2.5 px-3">Kol S/T · Pengasuh 1 &amp; 2</th>
+                    <th className="py-2.5 px-3 font-mono">Kol V/W · Kedatangan</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-xs">
+                  {perizinanList.map((row, idx) => (
+                    <tr
+                      key={`${row.idPerizinan}-${idx}`}
+                      className="hover:bg-slate-50/80 transition align-top"
+                    >
+                      <td className="py-2.5 px-3 font-mono font-bold text-slate-800">
+                        #{row.no}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <div className="font-semibold text-slate-900">{row.nama}</div>
+                        <div className="text-[11px] text-slate-500">
+                          Kelas {row.kelas} · {row.gedung} ({row.kamar})
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <div className="font-semibold text-emerald-900">
+                          {row.izin} — {row.keterangan}
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          Tujuan: {row.tujuan} · Rekom: {row.rekomendasi}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-[11px] text-slate-700">
+                        <div>
+                          Dari: {row.dariHari}, {row.dariTanggal} ({row.dariJam})
+                        </div>
+                        <div>
+                          S/d: {row.sampaiHari}, {row.sampaiTanggal} ({row.sampaiJam})
+                        </div>
+                        <div className="font-bold text-emerald-800 mt-0.5">
+                          Durasi: {row.durasi}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 text-[11px] text-slate-600">
+                        <div>P1: {row.pengasuh1}</div>
+                        {row.pengasuh2 && row.pengasuh2 !== '-' && (
+                          <div>P2: {row.pengasuh2}</div>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-[11px]">
+                        {row.tibaTanggal ? (
+                          <div className="text-emerald-800 font-semibold">
+                            Tiba: {row.tibaTanggal}
+                            {row.keteranganTiba ? ` (${row.keteranganTiba})` : ''}
+                          </div>
+                        ) : (
+                          <span className="text-amber-700 font-semibold">
+                            Belum Tiba
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>

@@ -220,11 +220,54 @@ export const SourceCodePanel: React.FC<SourceCodePanelProps> = ({
 
           <div className="rounded-2xl bg-stone-50 border border-slate-200/70 p-4">
             <p className="text-xs font-bold text-emerald-800">
-              04. Deploy Web App & Tempel URL
+              04. Deploy Web App &amp; Tempel URL
             </p>
             <p className="text-xs text-slate-600 mt-1 leading-relaxed">
               Klik <strong>Deploy → New deployment → Web app</strong> (<em>Execute as: Me</em>, <em>Who has access: Anyone</em>). Salin URL <code className="font-mono">/exec</code> lalu tempel di kolom atas!
             </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Kartu Unduh Paket Siap Upload ke Netlify / Cloudflare Pages */}
+      <div className="bg-gradient-to-r from-[#07361D] via-[#0B4627] to-[#07361D] text-white rounded-3xl p-6 shadow-sm border border-[#D4AF37]/50">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+          <div className="space-y-2 max-w-2xl">
+            <span className="inline-block text-[11px] font-bold bg-[#F5D000] text-[#07361D] px-2.5 py-0.5 rounded-md">
+              Versi Ringkas 1-File (Anti Gagal Upload di Netlify &amp; Cloudflare)
+            </span>
+            <h3 className="text-base font-bold text-white">
+              Unduh Paket Siap Upload (Seluruh Aplikasi + Logo Menyatu dalam 1 File <code className="font-mono">index.html</code>)
+            </h3>
+            <p className="text-xs text-emerald-100/90 leading-relaxed">
+              Agar tidak muncul error <em>&ldquo;We&apos;re having some trouble connecting you to Netlify&rdquo;</em>:
+              <br />
+              1. Buka Netlify atau <strong>Cloudflare Pages</strong> menggunakan <strong>Jendela Incognito / Mode Samaran (Ctrl + Shift + N)</strong> agar tidak diblokir ekstensi browser / AdBlock.
+              <br />
+              2. Unduh <strong>ZIP 1-File</strong> di samping (atau unduh file <strong>index.html Mandiri</strong>, masukkan ke dalam 1 folder kosong di laptop, lalu tarik <strong>folder</strong> tersebut ke kotak upload).
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 shrink-0">
+            <a
+              href="/netlify-dist-siap-upload.zip"
+              download="netlify-dist-siap-upload.zip"
+              data-testid="btn-download-netlify-zip"
+              className="min-h-[44px] px-4 py-3 rounded-xl bg-[#F5D000] hover:bg-amber-300 text-[#07361D] text-xs font-extrabold transition flex items-center gap-2 shadow-sm no-underline cursor-pointer"
+            >
+              <Download className="w-4 h-4" />
+              <span>Unduh ZIP 1-File (Netlify/Cloudflare)</span>
+            </a>
+
+            <a
+              href="/index-mandiri.html"
+              download="index.html"
+              data-testid="btn-download-standalone-html"
+              className="min-h-[44px] px-4 py-3 rounded-xl bg-white/15 hover:bg-white/25 border border-white/30 text-white text-xs font-bold transition flex items-center gap-2 no-underline cursor-pointer"
+            >
+              <FileCode className="w-4 h-4" />
+              <span>Unduh index.html Mandiri</span>
+            </a>
           </div>
         </div>
       </div>

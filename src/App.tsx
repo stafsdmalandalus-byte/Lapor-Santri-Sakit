@@ -14,6 +14,7 @@ import {
   createLaporanRow,
   runSyncStatusUKP,
   formatTimestampID,
+  getLaporanRowKey,
   type MasterSantri,
   type LaporanMusyrifRow,
   type DataUKPRow,
@@ -32,17 +33,38 @@ import {
   ReportOverview,
   type ReportStatusFilter,
 } from './components/ReportOverview';
+import { PerizinanPulangPanel } from './components/PerizinanPulangPanel';
+import {
+  createPerizinanRow,
+  getPerizinanRowKey,
+  applyPerpanjanganMasaIzin,
+  type PerizinanRow,
+  type PerizinanInput,
+} from './utils/perizinanEngine';
 import {
   getSavedGasUrl,
   saveGasUrl,
   fetchAllSheetsFromGas,
   postLaporanToGas,
   postActionToGas,
+  deleteLaporanFromGas,
+  getSavedPerizinanList,
+  savePerizinanListLocally,
+  postPerizinanToGas,
+  updatePerizinanTibaInGas,
+  extendPerizinanInGas,
+  deletePerizinanFromGas,
 } from './utils/gasClient';
 
 const LOGO_URL = '/assets/aistudio/Logo_Al-Andalus_c7d889d5.png';
 
-type AdminMenuTab = 'overview' | 'wa' | 'input' | 'spreadsheet' | 'kode';
+type AdminMenuTab =
+  | 'overview'
+  | 'wa'
+  | 'input'
+  | 'perizinan'
+  | 'spreadsheet'
+  | 'kode';
 
 export default function App() {
   const [userRole, setUserRole] = useState<UserRole>('MUSYRIF');
@@ -68,6 +90,9 @@ export default function App() {
   const [usersRoleList, setUsersRoleList] = useState<UserRoleRow[]>(() =>
     getSavedGasUrl() ? [] : INITIAL_USERS_ROLE
   );
+  const [perizinanList, setPerizinanList] = useState<PerizinanRow[]>(() =>
+    getSavedPerizinanList()
+  );
   const [syncLogs, setSyncLogs] = useState<SyncLogItem[]>([]);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(() =>
     formatTimestampID(new Date())
@@ -79,7 +104,7 @@ export default function App() {
   });
   const [autoTriggerEnabled, setAutoTriggerEnabled] = useState<boolean>(false);
 
-  // Fungsi menarik seluruh data 4 sheet (Master_Data, Laporan_Musyrif, Data_UKP, users_role) dari Google Sheets
+  // Fungsi menarik seluruh data 5 sheet (Master_Data, Laporan_Musyrif, Data_UKP, users_role, Perizinan) dari Google Sheets
   const pullFromGasSheets = useCallback(
     async (targetUrl: string, showSuccessAlert: boolean = false) => {
       if (!targetUrl.trim()) return;
@@ -101,6 +126,10 @@ export default function App() {
         }
         if (res.usersRoleList && res.usersRoleList.length > 0) {
           setUsersRoleList(res.usersRoleList);
+        }
+        if (res.perizinanList && res.perizinanList.length > 0) {
+          setPerizinanList(res.perizinanList);
+          savePerizinanListLocally(res.perizinanList);
         }
         if (res.lastSyncTime) {
           setLastSyncTime(res.lastSyncTime);
@@ -313,6 +342,152 @@ export default function App() {
     }
   };
 
+  // Handler Hapus Inputan Laporan (di Mode Admin Pengasuhan & Admin Pusat)
+  const handleDeleteLaporan = async (row: LaporanMusyrifRow) => {
+    const confirm = await Swal.fire({
+      icon: 'warning',
+      title: 'Hapus Inputan Laporan?',
+      html: `<div class="text-xs text-slate-600 space-y-1 text-left bg-slate-50 p-3 rounded-xl border border-slate-200">
+        <p><b>Nama Santri:</b> ${row.namaSantri} (${row.kelas})</p>
+        <p><b>Tanggal Laporan:</b> ${row.tanggalLaporan}</p>
+        <p><b>Keluhan:</b> ${row.keluhanUtama}</p>
+        <p><b>ID / Waktu:</b> ${row.idLaporan} · ${row.timestamp}</p>
+      </div>
+      <p class="text-xs text-rose-700 font-semibold mt-2">Data yang dihapus tidak akan masuk ke rekap pesan WhatsApp maupun daftar pantauan.</p>`,
+      showCancelButton: true,
+      confirmButtonText: 'Ya, Hapus Inputan',
+      cancelButtonText: 'Batal',
+      confirmButtonColor: '#e11d48',
+      cancelButtonColor: '#64748b',
+    });
+
+    if (!confirm.isConfirmed) return;
+
+    const targetKey = getLaporanRowKey(row);
+    setLaporanList((prev) =>
+      prev.filter((item) => getLaporanRowKey(item) !== targetKey)
+    );
+
+    await deleteLaporanFromGas(gasWebAppUrl, row);
+
+    await Swal.fire({
+      icon: 'success',
+      title: 'Inputan Berhasil Dihapus',
+      text: `Laporan ${row.namaSantri} (${row.tanggalLaporan}) telah dihapus dari daftar.`,
+      timer: 1800,
+      showConfirmButton: false,
+    });
+  };
+
+  // Handler Perizinan Pulang (Khusus Mode Admin Pengasuhan & Admin Pusat/SDM)
+  const handleAddPerizinan = async (
+    input: PerizinanInput
+  ): Promise<PerizinanRow> => {
+    const maxNo = perizinanList.reduce((acc, r) => {
+      const n = parseInt(String(r.no || '0'), 10);
+      return Number.isNaN(n) ? acc : Math.max(acc, n);
+    }, 0);
+    const newRow = createPerizinanRow(input, maxNo + 1);
+
+    setPerizinanList((prev) => {
+      const updated = [newRow, ...prev];
+      savePerizinanListLocally(updated);
+      return updated;
+    });
+
+    if (gasWebAppUrl) {
+      postPerizinanToGas(gasWebAppUrl, newRow).catch(() => {});
+    }
+
+    return newRow;
+  };
+
+  const handleMarkPerizinanReturned = (
+    targetRow: PerizinanRow,
+    tibaTanggal: string,
+    keteranganTiba: string
+  ) => {
+    const key = getPerizinanRowKey(targetRow);
+    setPerizinanList((prev) => {
+      const updated = prev.map((r) =>
+        getPerizinanRowKey(r) === key
+          ? { ...r, tibaTanggal, keteranganTiba }
+          : r
+      );
+      savePerizinanListLocally(updated);
+      return updated;
+    });
+
+    if (gasWebAppUrl) {
+      updatePerizinanTibaInGas(
+        gasWebAppUrl,
+        targetRow,
+        tibaTanggal,
+        keteranganTiba
+      ).catch(() => {});
+    }
+  };
+
+  const handleExtendPerizinan = (
+    targetRow: PerizinanRow,
+    sampaiTanggalBaru: string,
+    sampaiJamBaru: string,
+    alasanPerpanjangan: string
+  ): PerizinanRow => {
+    const key = getPerizinanRowKey(targetRow);
+    const extendedRow = applyPerpanjanganMasaIzin(
+      targetRow,
+      sampaiTanggalBaru,
+      sampaiJamBaru,
+      alasanPerpanjangan
+    );
+
+    setPerizinanList((prev) => {
+      const updated = prev.map((r) =>
+        getPerizinanRowKey(r) === key ? extendedRow : r
+      );
+      savePerizinanListLocally(updated);
+      return updated;
+    });
+
+    if (gasWebAppUrl) {
+      extendPerizinanInGas(gasWebAppUrl, extendedRow).catch(() => {});
+    }
+
+    return extendedRow;
+  };
+
+  const handleDeletePerizinan = async (targetRow: PerizinanRow) => {
+    const confirm = await Swal.fire({
+      icon: 'warning',
+      title: 'Hapus Data Perizinan?',
+      html: `<div class="text-xs text-slate-600 space-y-1 text-left bg-slate-50 p-3 rounded-xl border border-slate-200">
+        <p><b>No. Surat:</b> #${targetRow.no}</p>
+        <p><b>Nama Santri:</b> ${targetRow.nama} (${targetRow.kelas})</p>
+        <p><b>Keperluan:</b> ${targetRow.izin} (${targetRow.keterangan || '-'})</p>
+        <p><b>Jadwal:</b> ${targetRow.dariTanggal} s/d ${targetRow.sampaiTanggal}</p>
+      </div>`,
+      showCancelButton: true,
+      confirmButtonText: 'Ya, Hapus Perizinan',
+      cancelButtonText: 'Batal',
+      confirmButtonColor: '#e11d48',
+      cancelButtonColor: '#64748b',
+    });
+
+    if (!confirm.isConfirmed) return;
+
+    const key = getPerizinanRowKey(targetRow);
+    setPerizinanList((prev) => {
+      const updated = prev.filter((r) => getPerizinanRowKey(r) !== key);
+      savePerizinanListLocally(updated);
+      return updated;
+    });
+
+    if (gasWebAppUrl) {
+      deletePerizinanFromGas(gasWebAppUrl, targetRow).catch(() => {});
+    }
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-[#FAF8F2] text-slate-900">
       {/* Main Content Area Berdasarkan 3 Role */}
@@ -352,7 +527,7 @@ export default function App() {
             }
           >
             {/* Header Bar Identitas Role Admin */}
-            <div className="bg-gradient-to-r from-[#07361D] via-[#0B4627] to-[#07361D] text-white rounded-2xl px-4 py-3.5 border border-[#D4AF37]/50 flex flex-wrap items-center justify-between gap-3 shadow-sm">
+            <div className="bg-gradient-to-r from-[#07361D] via-[#0B4627] to-[#07361D] text-white rounded-2xl px-4 py-3.5 border border-[#D4AF37]/50 flex flex-wrap items-center justify-between gap-3 shadow-sm print:hidden">
               <div className="flex items-center gap-3">
                 <div>
                   <p className="text-xs font-bold text-[#F5D000]">
@@ -394,7 +569,7 @@ export default function App() {
             <nav
               aria-label="Bar Menu Navigasi Admin"
               data-testid="admin-nav-bar"
-              className="bg-white rounded-2xl p-1.5 shadow-xs border border-[#D4AF37]/40 flex flex-wrap items-center gap-1.5"
+              className="bg-white rounded-2xl p-1.5 shadow-xs border border-[#D4AF37]/40 flex flex-wrap items-center gap-1.5 print:hidden"
             >
               <button
                 type="button"
@@ -433,6 +608,19 @@ export default function App() {
                 }`}
               >
                 <span>📝 Input Laporan Santri</span>
+              </button>
+
+              <button
+                type="button"
+                data-testid="tab-admin-perizinan"
+                onClick={() => setAdminTab('perizinan')}
+                className={`flex-1 min-w-[155px] min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                  adminTab === 'perizinan'
+                    ? 'bg-[#07361D] text-[#F5D000] shadow-xs'
+                    : 'text-slate-700 hover:bg-stone-100'
+                }`}
+              >
+                <span>🏠 Izin Pulang &amp; Surat Izin</span>
               </button>
 
               <button
@@ -476,6 +664,7 @@ export default function App() {
                   lastSyncTime={lastSyncTime}
                   onQuickSync={() => executeSyncUKP(true)}
                   mode="OVERVIEW_ONLY"
+                  onDeleteLaporan={handleDeleteLaporan}
                 />
               </div>
             )}
@@ -491,6 +680,7 @@ export default function App() {
                   lastSyncTime={lastSyncTime}
                   onQuickSync={() => executeSyncUKP(true)}
                   mode="WA_ONLY"
+                  onDeleteLaporan={handleDeleteLaporan}
                 />
               </div>
             )}
@@ -510,6 +700,20 @@ export default function App() {
                   logoUrl={LOGO_URL}
                   activeMusyrif={activeMusyrif}
                   hideFullOverview={true}
+                />
+              </div>
+            )}
+
+            {adminTab === 'perizinan' && (
+              <div className="max-w-4xl mx-auto">
+                <PerizinanPulangPanel
+                  masterData={masterData}
+                  perizinanList={perizinanList}
+                  logoUrl={LOGO_URL}
+                  onAddPerizinan={handleAddPerizinan}
+                  onMarkPerizinanReturned={handleMarkPerizinanReturned}
+                  onExtendPerizinan={handleExtendPerizinan}
+                  onDeletePerizinan={handleDeletePerizinan}
                 />
               </div>
             )}
@@ -536,6 +740,8 @@ export default function App() {
                 onUpdateUserPassword={handleUpdateUserPassword}
                 onAddUserRole={handleAddUserRole}
                 hideUsersRoleTab={userRole === 'ADMIN_PENGASUHAN'}
+                onDeleteLaporan={handleDeleteLaporan}
+                perizinanList={perizinanList}
               />
             )}
 
@@ -552,7 +758,7 @@ export default function App() {
       </main>
 
       {/* Custom Footer Sesuai Spesifikasi User */}
-      <footer className="w-full bg-[#07361D] border-t-2 border-[#D4AF37]/50 py-5 px-4 text-center mt-10">
+      <footer className="w-full bg-[#07361D] border-t-2 border-[#D4AF37]/50 py-5 px-4 text-center mt-10 print:hidden">
         <p className="text-xs font-medium text-[#F5D000]/90">
           Bidang Pengasuhan Pesantren Al-Andalus
         </p>

@@ -1,19 +1,103 @@
 import {
   normalizeRoleValue,
   normalizeDateYYYYMMDD,
+  cleanDisplayName,
+  getLaporanRowKey,
   type MasterSantri,
   type LaporanMusyrifRow,
   type DataUKPRow,
   type UserRoleRow,
   type LaporanInput,
 } from './ukpSyncEngine';
+import {
+  INITIAL_PERIZINAN_DATA,
+  getIndonesianDayName,
+  calculateDurationDays,
+  getMonthNameID,
+  parsePerpanjanganInfo,
+  type PerizinanRow,
+} from './perizinanEngine';
 
 const STORAGE_KEY_GAS_URL = 'alandalus_gas_webapp_url_v1';
+const STORAGE_KEY_DELETED_LAPORAN = 'alandalus_deleted_laporan_keys_v1';
+const STORAGE_KEY_LOCAL_PERIZINAN = 'alandalus_local_perizinan_rows_v1';
 
 // Jika ingin URL Google Apps Script tertanam permanen di semua perangkat (Netlify/HP Musyrif),
 // isi DEFAULT_GAS_WEB_APP_URL di bawah ini atau set VITE_GAS_WEB_APP_URL di Environment Variables Netlify.
 export const DEFAULT_GAS_WEB_APP_URL =
   'https://script.google.com/macros/s/AKfycbwg9QQYMY6KCd6dAf7t5LCAqSLTxevKR1FrLRzOPahW58EmYGuzGMjl54TDOryzc_5l/exec';
+
+export function getSavedPerizinanList(): PerizinanRow[] {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return INITIAL_PERIZINAN_DATA;
+    }
+    const raw = localStorage.getItem(STORAGE_KEY_LOCAL_PERIZINAN);
+    if (!raw) return INITIAL_PERIZINAN_DATA;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed as PerizinanRow[];
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return INITIAL_PERIZINAN_DATA;
+}
+
+export function savePerizinanListLocally(rows: PerizinanRow[]): void {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    localStorage.setItem(STORAGE_KEY_LOCAL_PERIZINAN, JSON.stringify(rows));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function getDeletedLaporanKeys(): Set<string> {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return new Set<string>();
+    }
+    const raw = localStorage.getItem(STORAGE_KEY_DELETED_LAPORAN);
+    if (!raw) return new Set<string>();
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return new Set<string>(parsed.map((item) => String(item)));
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return new Set<string>();
+}
+
+export function markLaporanDeletedLocally(row: LaporanMusyrifRow): void {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    const current = getDeletedLaporanKeys();
+    current.add(getLaporanRowKey(row));
+    if (row.idLaporan) {
+      current.add(`ID:${row.idLaporan.trim()}`);
+    }
+    localStorage.setItem(
+      STORAGE_KEY_DELETED_LAPORAN,
+      JSON.stringify(Array.from(current))
+    );
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function isLaporanDeletedLocally(
+  row: LaporanMusyrifRow,
+  deletedSet: Set<string> = getDeletedLaporanKeys()
+): boolean {
+  if (deletedSet.size === 0) return false;
+  if (deletedSet.has(getLaporanRowKey(row))) return true;
+  if (row.idLaporan && deletedSet.has(`ID:${row.idLaporan.trim()}`)) {
+    return true;
+  }
+  return false;
+}
 
 export interface GasAllDataResponse {
   status: 'success' | 'error';
@@ -22,6 +106,7 @@ export interface GasAllDataResponse {
   laporanList?: LaporanMusyrifRow[];
   ukpList?: DataUKPRow[];
   usersRoleList?: UserRoleRow[];
+  perizinanList?: PerizinanRow[];
   lastSyncTime?: string;
 }
 
@@ -215,20 +300,97 @@ export function normalizeUsersRoleList(rawList: unknown[]): UserRoleRow[] {
 }
 
 function normalizeAllDataResponse(data: GasAllDataResponse): GasAllDataResponse {
+  if (Array.isArray(data.masterData)) {
+    data.masterData = data.masterData.map((m) => ({
+      ...m,
+      namaSantri: cleanDisplayName(m.namaSantri),
+    }));
+  }
   if (Array.isArray(data.usersRoleList)) {
     data.usersRoleList = normalizeUsersRoleList(data.usersRoleList);
   }
   if (Array.isArray(data.laporanList)) {
-    data.laporanList = data.laporanList.map((r) => ({
-      ...r,
-      tanggalLaporan: normalizeDateYYYYMMDD(r.tanggalLaporan),
-    }));
+    const deletedSet = getDeletedLaporanKeys();
+    data.laporanList = data.laporanList
+      .filter((r) => {
+        const idClean = String(r.idLaporan || '').trim().toLowerCase();
+        const namaClean = cleanDisplayName(r.namaSantri).toLowerCase();
+        if (
+          !namaClean ||
+          idClean === 'id_laporan' ||
+          namaClean === 'nama_santri'
+        ) {
+          return false;
+        }
+        return !isLaporanDeletedLocally(r, deletedSet);
+      })
+      .map((r) => ({
+        ...r,
+        namaSantri: cleanDisplayName(r.namaSantri),
+        tanggalLaporan: normalizeDateYYYYMMDD(r.tanggalLaporan),
+      }));
   }
   if (Array.isArray(data.ukpList)) {
     data.ukpList = data.ukpList.map((u) => ({
       ...u,
+      nama: cleanDisplayName(u.nama),
       tanggalPemeriksaan: normalizeDateYYYYMMDD(u.tanggalPemeriksaan),
     }));
+  }
+  if (Array.isArray(data.perizinanList)) {
+    data.perizinanList = data.perizinanList
+      .filter((p) => {
+        const namaClean = cleanDisplayName(p.nama).toLowerCase();
+        return Boolean(
+          namaClean &&
+            namaClean !== '-' &&
+            namaClean !== '#n/a' &&
+            namaClean !== 'nama'
+        );
+      })
+      .map((p, idx) => {
+        const dariTanggal = normalizeDateYYYYMMDD(p.dariTanggal);
+        const rawSampai = normalizeDateYYYYMMDD(p.sampaiTanggal);
+        const tibaTanggal = p.tibaTanggal
+          ? normalizeDateYYYYMMDD(p.tibaTanggal)
+          : '';
+        const baseRow: PerizinanRow = {
+          ...p,
+          idPerizinan: p.idPerizinan || `IZN-GAS-${idx + 1}`,
+          nama: cleanDisplayName(p.nama),
+          dariTanggal,
+          dariHari: p.dariHari || getIndonesianDayName(dariTanggal),
+          sampaiTanggal: rawSampai,
+          sampaiHari: p.sampaiHari || getIndonesianDayName(rawSampai),
+          durasi:
+            p.durasi && !p.durasi.includes('#N/A')
+              ? p.durasi
+              : calculateDurationDays(dariTanggal, rawSampai),
+          bulan:
+            p.bulan && p.bulan !== 'December'
+              ? p.bulan
+              : getMonthNameID(dariTanggal),
+          tibaTanggal,
+        };
+
+        const extInfo = parsePerpanjanganInfo(baseRow);
+        if (extInfo.isExtended && extInfo.sampaiTanggalBaru) {
+          const finalSampai = extInfo.sampaiTanggalBaru;
+          return {
+            ...baseRow,
+            sampaiTanggal: finalSampai,
+            sampaiHari: getIndonesianDayName(finalSampai),
+            sampaiJam: extInfo.sampaiJamBaru || baseRow.sampaiJam || '17:00',
+            durasi: calculateDurationDays(dariTanggal, finalSampai),
+            isExtended: true,
+            sampaiTanggalAwal: extInfo.sampaiTanggalAwal || rawSampai,
+            alasanPerpanjangan: extInfo.alasanPerpanjangan,
+            perpanjanganKe: extInfo.perpanjanganKe,
+          };
+        }
+
+        return baseRow;
+      });
   }
   return data;
 }
@@ -504,4 +666,114 @@ export async function postLaporanToGas(
     ...input,
   });
 }
+
+export async function deleteLaporanFromGas(
+  gasUrl: string,
+  row: LaporanMusyrifRow
+): Promise<{
+  status: string;
+  deleted?: boolean;
+  message?: string;
+}> {
+  markLaporanDeletedLocally(row);
+  if (!gasUrl.trim()) {
+    return { status: 'success', deleted: true };
+  }
+  return postActionToGas(gasUrl, {
+    action: 'deleteLaporan',
+    idLaporan: row.idLaporan,
+    timestamp: row.timestamp,
+    namaSantri: row.namaSantri,
+    tanggalLaporan: row.tanggalLaporan,
+  });
+}
+
+export async function postPerizinanToGas(
+  gasUrl: string,
+  row: PerizinanRow
+): Promise<{
+  status: string;
+  perizinanList?: PerizinanRow[];
+  message?: string;
+}> {
+  if (!gasUrl.trim()) {
+    return { status: 'success' };
+  }
+  return postActionToGas(gasUrl, {
+    action: 'simpanPerizinan',
+    ...row,
+  });
+}
+
+export async function updatePerizinanTibaInGas(
+  gasUrl: string,
+  row: PerizinanRow,
+  tibaTanggal: string,
+  keteranganTiba: string
+): Promise<{
+  status: string;
+  perizinanList?: PerizinanRow[];
+  message?: string;
+}> {
+  if (!gasUrl.trim()) {
+    return { status: 'success' };
+  }
+  return postActionToGas(gasUrl, {
+    action: 'updatePerizinanTiba',
+    idPerizinan: row.idPerizinan,
+    no: row.no,
+    nama: row.nama,
+    dariTanggal: row.dariTanggal,
+    tibaTanggal,
+    keteranganTiba,
+  });
+}
+
+export async function extendPerizinanInGas(
+  gasUrl: string,
+  extendedRow: PerizinanRow
+): Promise<{
+  status: string;
+  perizinanList?: PerizinanRow[];
+  message?: string;
+}> {
+  if (!gasUrl.trim()) {
+    return { status: 'success' };
+  }
+  return postActionToGas(gasUrl, {
+    action: 'updatePerizinanTiba',
+    idPerizinan: extendedRow.idPerizinan,
+    no: extendedRow.no,
+    nama: extendedRow.nama,
+    dariTanggal: extendedRow.dariTanggal,
+    sampaiTanggal: extendedRow.sampaiTanggal,
+    sampaiHari: extendedRow.sampaiHari,
+    sampaiJam: extendedRow.sampaiJam,
+    durasi: extendedRow.durasi,
+    tibaTanggal: '',
+    keteranganTiba: extendedRow.keteranganTiba,
+  });
+}
+
+export async function deletePerizinanFromGas(
+  gasUrl: string,
+  row: PerizinanRow
+): Promise<{
+  status: string;
+  deleted?: boolean;
+  message?: string;
+}> {
+  if (!gasUrl.trim()) {
+    return { status: 'success', deleted: true };
+  }
+  return postActionToGas(gasUrl, {
+    action: 'deletePerizinan',
+    idPerizinan: row.idPerizinan,
+    no: row.no,
+    nama: row.nama,
+    dariTanggal: row.dariTanggal,
+  });
+}
+
+
 

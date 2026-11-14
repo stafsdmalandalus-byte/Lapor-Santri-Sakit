@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import Swal from 'sweetalert2';
 import {
   ClipboardList,
@@ -14,6 +14,10 @@ import {
   ChevronUp,
   ExternalLink,
   Download,
+  Trash2,
+  AlertTriangle,
+  Search,
+  X,
 } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip } from 'recharts';
 import {
@@ -22,10 +26,15 @@ import {
   calculateReportOverview,
   buildReportStatusPieData,
   filterLaporanByDateRange,
+  filterLaporanBySantriName,
   generateDailyWhatsAppReport,
   generateDailyHealthCsvReport,
   getTodayDateISO,
   getDynamicDatePresets,
+  normalizeDateYYYYMMDD,
+  getLaporanRowKey,
+  findDuplicateLaporanKeys,
+  cleanDisplayName,
 } from '../utils/ukpSyncEngine';
 
 export type ReportStatusFilter = 'ALL' | 'WAITING' | 'DONE';
@@ -38,6 +47,7 @@ interface ReportOverviewProps {
   onDateRangeChange: (range: DateRangeFilter) => void;
   lastSyncTime: string | null;
   onQuickSync?: () => void;
+  onDeleteLaporan?: (row: LaporanMusyrifRow) => void;
   mode?: 'FULL' | 'OVERVIEW_ONLY' | 'WA_ONLY';
 }
 
@@ -49,6 +59,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   onDateRangeChange,
   lastSyncTime,
   onQuickSync,
+  onDeleteLaporan,
   mode = 'FULL',
 }) => {
   const [waTargetDate, setWaTargetDate] = useState<string>(() =>
@@ -57,14 +68,36 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   const [waPhoneNumber, setWaPhoneNumber] = useState<string>('');
   const [showWaPreview, setShowWaPreview] = useState<boolean>(true);
   const [copiedWa, setCopiedWa] = useState<boolean>(false);
+  const [searchSantriQuery, setSearchSantriQuery] = useState<string>('');
 
   const datePresets = getDynamicDatePresets();
   const dateFilteredList = filterLaporanByDateRange(laporanList, dateRange);
-  const stats = calculateReportOverview(dateFilteredList);
-  const pieData = buildReportStatusPieData(dateFilteredList);
+  const filteredByNameAndDateList = useMemo(
+    () => filterLaporanBySantriName(dateFilteredList, searchSantriQuery),
+    [dateFilteredList, searchSantriQuery]
+  );
+
+  // Daftar nama santri unik pada periode terpilih untuk rekomendasi cepat
+  const uniqueSantriNames = useMemo(() => {
+    const seen = new Set<string>();
+    const names: string[] = [];
+    for (const row of dateFilteredList) {
+      const clean = cleanDisplayName(row.namaSantri);
+      const lower = clean.toLowerCase();
+      if (clean && !seen.has(lower)) {
+        seen.add(lower);
+        names.push(clean);
+      }
+    }
+    return names;
+  }, [dateFilteredList]);
+
+  const stats = calculateReportOverview(filteredByNameAndDateList);
+  const pieData = buildReportStatusPieData(filteredByNameAndDateList);
   const hasData = stats.total > 0;
   const isDateFiltered =
     dateRange.startDate.trim() !== '' || dateRange.endDate.trim() !== '';
+  const isNameFiltered = searchSantriQuery.trim() !== '';
 
   const dailyWaReport = generateDailyWhatsAppReport(
     laporanList,
@@ -132,13 +165,21 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
     });
   };
 
-  const statusFilteredRows = dateFilteredList.filter((r) => {
+  const statusFilteredRows = filteredByNameAndDateList.filter((r) => {
     const isWait =
       r.statusPenanganan.trim().toUpperCase() === 'MENUNGGU PENANGANAN';
     if (activeFilter === 'WAITING') return isWait;
     if (activeFilter === 'DONE') return !isWait;
     return true;
   });
+
+  const duplicateKeys = findDuplicateLaporanKeys(laporanList);
+  const cleanWaDate = normalizeDateYYYYMMDD(waTargetDate);
+  const waDailyRows = cleanWaDate
+    ? laporanList.filter(
+        (r) => normalizeDateYYYYMMDD(r.tanggalLaporan) === cleanWaDate
+      )
+    : laporanList;
 
   if (mode === 'WA_ONLY') {
     return (
@@ -213,6 +254,78 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
             />
           </div>
         </div>
+
+        {/* Daftar Inputan pada Tanggal Ini (Bisa Hapus Data Double Input Sebelum Dikirim ke WA) */}
+        {onDeleteLaporan && (
+          <div className="rounded-2xl bg-stone-50/90 border border-slate-200/80 p-4 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-bold text-slate-800">
+                  Daftar Inputan Musyrif ({waDailyRows.length} Data) — Periksa Sebelum Kirim WA
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  Jika ada data yang <strong>double input</strong> dari Musyrif, klik tombol <strong>Hapus</strong> agar tidak ikut terkirim ke WhatsApp.
+                </p>
+              </div>
+            </div>
+
+            {waDailyRows.length === 0 ? (
+              <div className="text-center py-4 text-xs text-slate-500 bg-white rounded-xl border border-slate-200/60">
+                Tidak ada inputan laporan pada tanggal ini.
+              </div>
+            ) : (
+              <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                {waDailyRows.map((row, idx) => {
+                  const isDup = duplicateKeys.has(getLaporanRowKey(row));
+                  return (
+                    <div
+                      key={`${getLaporanRowKey(row)}-${idx}`}
+                      className={`rounded-xl px-3 py-2.5 border flex items-center justify-between gap-3 text-xs ${
+                        isDup
+                          ? 'bg-rose-50/70 border-rose-300'
+                          : 'bg-white border-slate-200/80'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-mono font-bold text-slate-500">
+                            {idx + 1}.
+                          </span>
+                          <span className="font-bold text-slate-900">
+                            {row.namaSantri}
+                          </span>
+                          <span className="text-slate-500">
+                            ({row.kelas} · {row.kamar})
+                          </span>
+                          {isDup && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-rose-100 text-rose-800 px-2 py-0.5 rounded-md border border-rose-200">
+                              <AlertTriangle className="w-3 h-3" />
+                              DOUBLE INPUT
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-600 truncate mt-0.5">
+                          {row.keluhanUtama}
+                          {row.namaMusyrif ? ` · Pelapor: ${row.namaMusyrif}` : ''}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        data-testid={`btn-wa-delete-${row.idLaporan}`}
+                        onClick={() => onDeleteLaporan(row)}
+                        className="min-h-[32px] px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-200 hover:border-rose-600 text-[11px] font-semibold transition flex items-center gap-1 shrink-0 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Hapus</span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Tombol Kirim Langsung ke WA & Salin Teks WA */}
         <div className="flex flex-wrap items-center gap-2.5">
@@ -401,6 +514,69 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
               className="w-full rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono tabular-nums text-slate-800 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
             />
           </div>
+        </div>
+
+        {/* Filter Pencarian Berdasarkan Nama Santri */}
+        <div
+          data-testid="report-overview-name-filter"
+          className="pt-2 border-t border-slate-200/70 space-y-1.5"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <label
+              htmlFor="overview-search-santri"
+              className="flex items-center gap-1.5 text-xs font-semibold text-slate-700"
+            >
+              <Search className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+              <span>Filter Pencarian Nama Santri</span>
+            </label>
+            {isNameFiltered && (
+              <button
+                type="button"
+                data-testid="btn-clear-search-santri"
+                onClick={() => setSearchSantriQuery('')}
+                className="text-[11px] font-semibold text-rose-700 hover:text-rose-900 flex items-center gap-1 cursor-pointer whitespace-nowrap"
+              >
+                <X className="w-3 h-3" />
+                <span>Hapus Filter Nama</span>
+              </button>
+            )}
+          </div>
+
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              id="overview-search-santri"
+              data-testid="input-search-santri-overview"
+              type="text"
+              list="overview-santri-suggestions"
+              value={searchSantriQuery}
+              onChange={(e) => setSearchSantriQuery(e.target.value)}
+              placeholder="Ketik nama santri (atau ID / kelas / kamar) untuk mencari riwayat laporan..."
+              className="w-full rounded-xl border border-slate-300 bg-white pl-8 pr-8 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+            />
+            {isNameFiltered && (
+              <button
+                type="button"
+                aria-label="Bersihkan pencarian nama santri"
+                onClick={() => setSearchSantriQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 p-0.5 rounded-md cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+            <datalist id="overview-santri-suggestions">
+              {uniqueSantriNames.map((nama) => (
+                <option key={nama} value={nama} />
+              ))}
+            </datalist>
+          </div>
+
+          {isNameFiltered && (
+            <p className="text-[11px] text-emerald-800 font-medium">
+              Menampilkan <strong>{filteredByNameAndDateList.length}</strong> riwayat laporan untuk pencarian{' '}
+              <span className="font-mono font-bold">&ldquo;{searchSantriQuery.trim()}&rdquo;</span>
+            </p>
+          )}
         </div>
       </div>
 
@@ -619,10 +795,10 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
         </div>
       </div>
 
-      {/* Daftar Ringkas Laporan Sesuai Filter pada Mode OVERVIEW_ONLY */}
-      {mode === 'OVERVIEW_ONLY' && (
+      {/* Daftar Ringkas Laporan Sesuai Filter pada Mode OVERVIEW_ONLY atau saat Pencarian Nama Aktif */}
+      {(mode === 'OVERVIEW_ONLY' || isNameFiltered) && (
         <div className="mt-4 pt-4 border-t border-slate-100 space-y-2.5">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs font-bold text-slate-800">
               Daftar Laporan Santri ({statusFilteredRows.length} Data)
             </p>
@@ -635,22 +811,31 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                   ? 'Sudah Ditangani'
                   : 'Semua Status'}
               </strong>
+              {isNameFiltered ? (
+                <>
+                  {' '}
+                  · Nama: <strong>&ldquo;{searchSantriQuery.trim()}&rdquo;</strong>
+                </>
+              ) : null}
             </span>
           </div>
 
           <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
             {statusFilteredRows.length === 0 ? (
               <div className="text-center py-6 text-xs text-slate-500 bg-stone-50/70 rounded-2xl border border-slate-200/60">
-                Tidak ada data laporan pada filter ini.
+                {isNameFiltered
+                  ? `Tidak ditemukan riwayat laporan untuk santri "${searchSantriQuery.trim()}".`
+                  : 'Tidak ada data laporan pada filter ini.'}
               </div>
             ) : (
               statusFilteredRows.map((row, idx) => {
                 const isWaiting =
                   row.statusPenanganan.trim().toUpperCase() ===
                   'MENUNGGU PENANGANAN';
+                const isDup = duplicateKeys.has(getLaporanRowKey(row));
                 return (
                   <div
-                    key={`${row.idLaporan}-${row.idSantri}-${idx}`}
+                    key={`${getLaporanRowKey(row)}-${idx}`}
                     className={`rounded-2xl p-3.5 border transition ${
                       isWaiting
                         ? 'bg-amber-50/40 border-amber-200/80'
@@ -659,25 +844,47 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <p className="text-xs font-bold text-slate-900">
-                          {row.namaSantri}{' '}
-                          <span className="font-normal text-slate-500">
-                            ({row.kelas} · {row.kamar})
-                          </span>
-                        </p>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <p className="text-xs font-bold text-slate-900">
+                            {row.namaSantri}{' '}
+                            <span className="font-normal text-slate-500">
+                              ({row.kelas} · {row.kamar})
+                            </span>
+                          </p>
+                          {isDup && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-rose-100 text-rose-800 px-2 py-0.5 rounded-md border border-rose-200">
+                              <AlertTriangle className="w-3 h-3" />
+                              DOUBLE INPUT
+                            </span>
+                          )}
+                        </div>
                         <p className="text-xs text-slate-700 mt-1">
                           {row.keluhanUtama}
                         </p>
                       </div>
-                      <span
-                        className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-md shrink-0 ${
-                          isWaiting
-                            ? 'bg-amber-100 text-amber-900'
-                            : 'bg-emerald-100 text-emerald-900'
-                        }`}
-                      >
-                        {isWaiting ? 'MENUNGGU' : 'DITANGANI'}
-                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span
+                          className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-md ${
+                            isWaiting
+                              ? 'bg-amber-100 text-amber-900'
+                              : 'bg-emerald-100 text-emerald-900'
+                          }`}
+                        >
+                          {isWaiting ? 'MENUNGGU' : 'DITANGANI'}
+                        </span>
+                        {onDeleteLaporan && (
+                          <button
+                            type="button"
+                            data-testid={`btn-overview-delete-${row.idLaporan}`}
+                            onClick={() => onDeleteLaporan(row)}
+                            title="Hapus inputan laporan ini"
+                            className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-200 hover:border-rose-600 text-[11px] font-semibold transition flex items-center gap-1 cursor-pointer"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Hapus</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div className="mt-2 pt-2 border-t border-slate-200/60 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
                       <span>

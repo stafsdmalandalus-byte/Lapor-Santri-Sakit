@@ -502,6 +502,11 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * 4. users_role      : id_user (A - diabaikan), nama (B - untuk login & musrif_pelapor),
  *                      role [admin_pusat / admin_pengasuhan / user] (C),
  *                      password (D), keterangan (E)
+ * 5. Perizinan       : No (A), Nama (B), Kelas (C), Gedung (D), Kamar (E), Izin (F),
+ *                      Keterangan (G), Tujuan (H), Rekomendasi (I), Dari Tanggal (J),
+ *                      Dari Hari (K), Dari Jam (L), Sampai Tanggal (M), Sampai Hari (N),
+ *                      Sampai Jam (O), Durasi (P), [Q], Bulan (R), Pengasuh 1 (S),
+ *                      Pengasuh 2 (T), Walikelas (U), Tiba Tanggal (V), Keterangan (W)
  * ============================================================================
  */
 
@@ -509,6 +514,7 @@ const SHEET_MASTER = 'Master_Data';
 const SHEET_LAPORAN = 'Laporan_Musyrif';
 const SHEET_UKP = 'Data_UKP';
 const SHEET_USERS = 'users_role';
+const SHEET_PERIZINAN = 'Perizinan';
 const TIMEZONE = 'Asia/Jakarta';
 
 /**
@@ -535,8 +541,31 @@ function findSheetSmart_(ss, candidates) {
   return null;
 }
 
+const MONTH_MAP_ = {
+  januari: '01', january: '01', jan: '01',
+  februari: '02', pebruari: '02', february: '02', feb: '02', peb: '02',
+  maret: '03', march: '03', mar: '03',
+  april: '04', apr: '04',
+  mei: '05', may: '05',
+  juni: '06', june: '06', jun: '06',
+  juli: '07', july: '07', jul: '07',
+  agustus: '08', august: '08', agu: '08', ags: '08', agst: '08', aug: '08',
+  september: '09', sept: '09', sep: '09',
+  oktober: '10', october: '10', okt: '10', oct: '10',
+  november: '11', nopember: '11', nov: '11', nop: '11',
+  desember: '12', december: '12', des: '12', dec: '12'
+};
+
+function cleanPersonName_(val) {
+  return String(val || '')
+    .replace(/[\\u200B-\\u200D\\uFEFF\\u2060]/g, '')
+    .replace(/\\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
 /**
- * Helper: Menormalkan format tanggal dari Google Sheets ke YYYY-MM-DD
+ * Helper: Menormalkan format tanggal dari Google Sheets ke YYYY-MM-DD (termasuk "10 November 2026")
  */
 function normalizeDateStr_(val) {
   if (!val) return '';
@@ -552,6 +581,13 @@ function normalizeDateStr_(val) {
   const ymd = s.match(/^(\\d{4})[\\/-](\\d{1,2})[\\/-](\\d{1,2})/);
   if (ymd) {
     return ymd[1] + '-' + String(ymd[2]).padStart(2, '0') + '-' + String(ymd[3]).padStart(2, '0');
+  }
+  const textMonth = s.match(/^(\\d{1,2})[\\s\\/-]+([a-zA-Z]+)[\\s,\\/-]+(\\d{4})/);
+  if (textMonth) {
+    const mm = MONTH_MAP_[textMonth[2].toLowerCase()];
+    if (mm) {
+      return textMonth[3] + '-' + mm + '-' + String(textMonth[1]).padStart(2, '0');
+    }
   }
   return s;
 }
@@ -629,7 +665,18 @@ function setupSheetsOtomatis() {
     ]);
   }
 
-  Logger.log('Ke-4 Sheet (Master_Data, Laporan_Musyrif, Data_UKP, users_role) siap digunakan!');
+  // 5. Sheet Perizinan (23 Kolom A-W sesuai format resmi Perizinan 2026-2027)
+  let sPerizinan = findSheetSmart_(ss, [SHEET_PERIZINAN, 'perizinan', 'Perizinan_Pulang', 'Izin_Pulang']);
+  if (!sPerizinan) {
+    sPerizinan = ss.insertSheet(SHEET_PERIZINAN);
+    sPerizinan.getRange(1, 1, 1, 23).setValues([[
+      'No', 'Nama', 'Kelas', 'Gedung', 'Kamar', 'Izin', 'Keterangan', 'Tujuan', 'Rekomendasi',
+      'Dari Tanggal', 'Dari Hari', 'Dari Jam', 'Sampai Tanggal', 'Sampai Hari', 'Sampai Jam',
+      'Durasi', '', 'Bulan', 'Pengasuh 1', 'Pengasuh 2', 'Walikelas', 'Tiba Tanggal', 'Keterangan'
+    ]]);
+  }
+
+  Logger.log('Ke-5 Sheet (Master_Data, Laporan_Musyrif, Data_UKP, users_role, Perizinan) siap digunakan!');
 }
 
 /**
@@ -644,6 +691,7 @@ function handleApiAction_(action, payload, e) {
         laporanList: getLaporanMusyrif(),
         ukpList: getDataUKP(),
         usersRoleList: getUsersRole(),
+        perizinanList: getPerizinan(),
         lastSyncTime: Utilities.formatDate(new Date(), TIMEZONE, 'dd/MM/yyyy HH:mm:ss')
       }, e);
     }
@@ -658,6 +706,40 @@ function handleApiAction_(action, payload, e) {
     if (action === 'simpanLaporan') {
       const result = simpanLaporanMusyrif(payload);
       return sendJsonResponse_(result, e);
+    }
+
+    if (action === 'deleteLaporan') {
+      const deleted = hapusLaporanMusyrif(payload);
+      return sendJsonResponse_({
+        status: 'success',
+        deleted: deleted,
+        laporanList: getLaporanMusyrif()
+      }, e);
+    }
+
+    if (action === 'simpanPerizinan') {
+      simpanPerizinan(payload);
+      return sendJsonResponse_({
+        status: 'success',
+        perizinanList: getPerizinan()
+      }, e);
+    }
+
+    if (action === 'updatePerizinanTiba') {
+      updatePerizinanTiba(payload);
+      return sendJsonResponse_({
+        status: 'success',
+        perizinanList: getPerizinan()
+      }, e);
+    }
+
+    if (action === 'deletePerizinan') {
+      const deleted = hapusPerizinan(payload);
+      return sendJsonResponse_({
+        status: 'success',
+        deleted: deleted,
+        perizinanList: getPerizinan()
+      }, e);
     }
 
     if (action === 'syncStatusUKP') {
@@ -694,13 +776,14 @@ function handleApiAction_(action, payload, e) {
       }, e);
     }
 
-    // Default fallback: kembalikan seluruh data 4 sheet
+    // Default fallback: kembalikan seluruh data 5 sheet
     return sendJsonResponse_({
       status: 'success',
       masterData: getMasterSantri(),
       laporanList: getLaporanMusyrif(),
       ukpList: getDataUKP(),
       usersRoleList: getUsersRole(),
+      perizinanList: getPerizinan(),
       lastSyncTime: Utilities.formatDate(new Date(), TIMEZONE, 'dd/MM/yyyy HH:mm:ss')
     }, e);
   } catch (err) {
@@ -1220,6 +1303,42 @@ function addMasterSantriToSheet(payload) {
   sheet.getRange(nextRow, 1, 1, 7).setValues([row]);
 }
 
+function hapusLaporanMusyrif(payload) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = findSheetSmart_(ss, [SHEET_LAPORAN, 'laporan-musyrif', 'Laporan Musyrif', 'laporan_musrif']);
+    if (!sheet || sheet.getLastRow() < 2) return false;
+
+    const lastRow = sheet.getLastRow();
+    const rows = sheet.getRange(2, 1, lastRow - 1, 6).getDisplayValues();
+    const targetId = String(payload.idLaporan || '').trim();
+    const targetTs = String(payload.timestamp || '').trim();
+    const targetNama = cleanPersonName_(payload.namaSantri);
+    const targetTgl = normalizeDateStr_(payload.tanggalLaporan);
+
+    // Cari dari bawah ke atas agar baris double input terbaru terhapus lebih dulu
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const rId = String(rows[i][0] || '').trim();
+      const rTs = String(rows[i][1] || '').trim();
+      const rTgl = normalizeDateStr_(rows[i][2]);
+      const rNama = cleanPersonName_(rows[i][5]);
+
+      const matchById = targetId && rId === targetId;
+      const matchByDetails = targetNama && rNama === targetNama && targetTgl && rTgl === targetTgl && (!targetTs || rTs === targetTs);
+
+      if (matchById || matchByDetails) {
+        sheet.deleteRow(i + 2);
+        return true;
+      }
+    }
+    return false;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 /**
  * ============================================================================
  * 8. FUNGSI UTAMA SINKRONISASI UKP (TIME-DRIVEN TRIGGER): syncStatusUKP()
@@ -1243,7 +1362,7 @@ function syncStatusUKP() {
 
   for (let i = 0; i < dataLaporan.length; i++) {
     const statusPenanganan = String(dataLaporan[i][11] || '').trim().toUpperCase();
-    const namaSantriLaporan = String(dataLaporan[i][5] || '').trim().toLowerCase();
+    const namaSantriLaporan = cleanPersonName_(dataLaporan[i][5]);
     const tglLaporan = normalizeDateStr_(dataLaporan[i][2]); // Kolom C: Tanggal_Laporan (YYYY-MM-DD)
 
     if (!namaSantriLaporan) continue;
@@ -1252,15 +1371,15 @@ function syncStatusUKP() {
     let tindakanTerbaru = '';
 
     // Cari dari baris paling bawah ke atas di Data_UKP
-    // WAJIB cocok Nama Santri (Kolom E) DAN Tanggal Pemeriksaan UKP (Kolom D) >= Tanggal Laporan (Kolom C)
+    // WAJIB cocok Nama Santri (Kolom E) DAN Tanggal Pemeriksaan UKP (Kolom D) === Tanggal Laporan (Kolom C) (Tanggal yang sama persis)
     for (let j = dataUKP.length - 1; j >= 0; j--) {
-      const namaSantriUKP = String(dataUKP[j][4] || '').trim().toLowerCase();
+      const namaSantriUKP = cleanPersonName_(dataUKP[j][4]);
       const tglUKP        = normalizeDateStr_(dataUKP[j][3]); // Kolom D: Tanggal Pemeriksaan (YYYY-MM-DD)
       const tindakanUKP   = String(dataUKP[j][15] || '').trim(); // Kolom P: Tindakan
 
-      const tanggalSesuai = (!tglLaporan || !tglUKP) ? true : (tglUKP >= tglLaporan);
+      const tanggalSamaPersis = Boolean(tglLaporan && tglUKP && tglUKP === tglLaporan);
 
-      if (namaSantriUKP === namaSantriLaporan && tindakanUKP !== '' && tanggalSesuai) {
+      if (namaSantriUKP === namaSantriLaporan && tindakanUKP !== '' && tanggalSamaPersis) {
         ditemukanTindakanValid = true;
         tindakanTerbaru = tindakanUKP;
         break;
@@ -1278,7 +1397,7 @@ function syncStatusUKP() {
         jumlahDiperbarui++;
       }
     } else if (statusPenanganan !== 'MENUNGGU PENANGANAN') {
-      // Koreksi otomatis jika sebelumnya terlanjur berubah jadi SUDAH DITANGANI gara-gara data UKP tanggal lama
+      // Koreksi otomatis jika sebelumnya terlanjur berubah jadi SUDAH DITANGANI gara-gara data UKP tanggal berbeda
       sheetLaporan.getRange(barisSheet, 12).setValue('MENUNGGU PENANGANAN');
       sheetLaporan.getRange(barisSheet, 14).setValue('');
       sheetLaporan.getRange(barisSheet, 15).setValue('');
@@ -1306,6 +1425,175 @@ function pasangTriggerSyncUKP() {
     .create();
 
   Logger.log('Time-Driven Trigger untuk syncStatusUKP() berhasil dipasang (setiap 5 menit).');
+}
+
+/**
+ * 10. Membaca & Mengelola Sheet Perizinan (23 Kolom A-W)
+ *     Mengabaikan baris kosong/template rumus yang Kolom B (Nama)-nya kosong atau '-'
+ */
+function getPerizinan() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = findSheetSmart_(ss, [SHEET_PERIZINAN, 'perizinan', 'Perizinan_Pulang', 'Izin_Pulang']);
+    if (!sheet || sheet.getLastRow() < 2) return [];
+
+    const maxCol = Math.max(23, sheet.getLastColumn());
+    const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, maxCol).getDisplayValues();
+    const list = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const nama = String(r[1] || '').trim();
+      // Abaikan baris template rumus yang Nama Santrinya kosong atau '-'
+      if (!nama || nama === '-' || nama.toLowerCase() === 'nama' || nama === '#N/A') continue;
+
+      list.push({
+        idPerizinan: 'IZN-ROW-' + (i + 2),
+        no: Number(r[0]) || (list.length + 1),
+        nama: nama,
+        kelas: String(r[2] || '').trim(),
+        gedung: String(r[3] || '').trim(),
+        kamar: String(r[4] || '').trim(),
+        izin: String(r[5] || '').trim(),
+        keterangan: String(r[6] || '').trim(),
+        tujuan: String(r[7] || '').trim(),
+        rekomendasi: String(r[8] || '').trim(),
+        dariTanggal: normalizeDateStr_(r[9]),
+        dariHari: String(r[10] || '').trim(),
+        dariJam: String(r[11] || '').trim(),
+        sampaiTanggal: normalizeDateStr_(r[12]),
+        sampaiHari: String(r[13] || '').trim(),
+        sampaiJam: String(r[14] || '').trim(),
+        durasi: String(r[15] || '').trim(),
+        bulan: String(r[17] || '').trim(),
+        pengasuh1: String(r[18] || '').trim(),
+        pengasuh2: String(r[19] || '').trim(),
+        walikelas: String(r[20] || '').trim(),
+        tibaTanggal: normalizeDateStr_(r[21]),
+        keteranganTiba: String(r[22] || '').trim()
+      });
+    }
+    return list;
+  } catch (err) {
+    return [];
+  }
+}
+
+function simpanPerizinan(payload) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = findSheetSmart_(ss, [SHEET_PERIZINAN, 'perizinan', 'Perizinan_Pulang', 'Izin_Pulang']);
+    if (!sheet) {
+      setupSheetsOtomatis();
+      sheet = findSheetSmart_(ss, [SHEET_PERIZINAN]);
+    }
+
+    const lastRow = sheet.getLastRow();
+    let targetRow = lastRow + 1;
+    let nextNo = 1;
+
+    if (lastRow >= 2) {
+      const colB = sheet.getRange(2, 1, lastRow - 1, 2).getDisplayValues();
+      for (let i = 0; i < colB.length; i++) {
+        const nm = String(colB[i][1] || '').trim();
+        if (nm && nm !== '-' && nm !== '#N/A') {
+          nextNo = Math.max(nextNo, (Number(colB[i][0]) || (i + 1)) + 1);
+          targetRow = i + 3;
+        }
+      }
+    }
+
+    const rowData = new Array(23).fill('');
+    rowData[0]  = payload.no || nextNo;
+    rowData[1]  = payload.nama || '';
+    rowData[2]  = payload.kelas || '';
+    rowData[3]  = payload.gedung || '';
+    rowData[4]  = payload.kamar || '';
+    rowData[5]  = payload.izin || '';
+    rowData[6]  = payload.keterangan || '';
+    rowData[7]  = payload.tujuan || '';
+    rowData[8]  = payload.rekomendasi || '';
+    rowData[9]  = normalizeDateStr_(payload.dariTanggal);
+    rowData[10] = payload.dariHari || '';
+    rowData[11] = payload.dariJam || '';
+    rowData[12] = normalizeDateStr_(payload.sampaiTanggal);
+    rowData[13] = payload.sampaiHari || '';
+    rowData[14] = payload.sampaiJam || '';
+    rowData[15] = payload.durasi || '';
+    rowData[16] = '';
+    rowData[17] = payload.bulan || '';
+    rowData[18] = payload.pengasuh1 || '';
+    rowData[19] = payload.pengasuh2 || '-';
+    rowData[20] = payload.walikelas || '-';
+    rowData[21] = normalizeDateStr_(payload.tibaTanggal);
+    rowData[22] = payload.keteranganTiba || '';
+
+    sheet.getRange(targetRow, 1, 1, 23).setValues([rowData]);
+    return true;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function updatePerizinanTiba(payload) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = findSheetSmart_(ss, [SHEET_PERIZINAN, 'perizinan', 'Perizinan_Pulang', 'Izin_Pulang']);
+    if (!sheet || sheet.getLastRow() < 2) return false;
+
+    const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 10).getDisplayValues();
+    const targetNama = cleanPersonName_(payload.nama);
+    const targetDari = normalizeDateStr_(payload.dariTanggal);
+
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const rNama = cleanPersonName_(rows[i][1]);
+      const rDari = normalizeDateStr_(rows[i][9]);
+      if (rNama === targetNama && (!targetDari || rDari === targetDari)) {
+        if (payload.sampaiTanggal) {
+          sheet.getRange(i + 2, 13).setValue(normalizeDateStr_(payload.sampaiTanggal));
+          if (payload.sampaiHari) sheet.getRange(i + 2, 14).setValue(payload.sampaiHari);
+          if (payload.sampaiJam) sheet.getRange(i + 2, 15).setValue(payload.sampaiJam);
+          if (payload.durasi) sheet.getRange(i + 2, 16).setValue(payload.durasi);
+        }
+        sheet.getRange(i + 2, 22).setValue(normalizeDateStr_(payload.tibaTanggal));
+        sheet.getRange(i + 2, 23).setValue(payload.keteranganTiba || '');
+        return true;
+      }
+    }
+    return false;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function hapusPerizinan(payload) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = findSheetSmart_(ss, [SHEET_PERIZINAN, 'perizinan', 'Perizinan_Pulang', 'Izin_Pulang']);
+    if (!sheet || sheet.getLastRow() < 2) return false;
+
+    const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 10).getDisplayValues();
+    const targetNama = cleanPersonName_(payload.nama);
+    const targetDari = normalizeDateStr_(payload.dariTanggal);
+
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const rNama = cleanPersonName_(rows[i][1]);
+      const rDari = normalizeDateStr_(rows[i][9]);
+      if (rNama === targetNama && (!targetDari || rDari === targetDari)) {
+        sheet.deleteRow(i + 2);
+        return true;
+      }
+    }
+    return false;
+  } finally {
+    lock.releaseLock();
+  }
 }
 `;
 

@@ -449,6 +449,20 @@ export const INITIAL_LAPORAN_MUSYRIF: LaporanMusyrifRow[] = [
 
 export const INITIAL_DATA_UKP: DataUKPRow[] = [
   {
+    idRow: 'UKP-0A',
+    tanggalPemeriksaan: '2026-10-18',
+    nama: 'Salman Al-Farisi Hakim',
+    keluhan: 'Batuk pilek dan demam ringan setelah kegiatan pramuka',
+    tindakan: 'Pemberian Paracetamol & Vitamin C',
+  },
+  {
+    idRow: 'UKP-0B',
+    tanggalPemeriksaan: '2026-10-25',
+    nama: 'Yusuf Maulana Siddiq',
+    keluhan: 'Alergi gatal kulit pada lengan dan punggung',
+    tindakan: 'Pemberian Cetirizine 10mg & Bedak Salicyl',
+  },
+  {
     idRow: 'UKP-1',
     tanggalPemeriksaan: '2026-11-03',
     nama: 'Muhammad Zaidan Al-Ghifari',
@@ -578,15 +592,35 @@ export function createLaporanRow(
 }
 
 /**
+ * Membersihkan nama santri/pengguna dari karakter Unicode tak terlihat (seperti Word Joiner \u2060),
+ * spasi ganda, dan mengubah ke huruf kecil untuk pencocokan akurat.
+ */
+export function normalizePersonName(raw: string): string {
+  return String(raw || '')
+    .replace(/[\u200B-\u200D\uFEFF\u2060]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Menghapus karakter Unicode tak terlihat dari teks tampilan nama
+ */
+export function cleanDisplayName(raw: string): string {
+  return String(raw || '')
+    .replace(/[\u200B-\u200D\uFEFF\u2060]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
  * Fungsi Sinkronisasi Utama: syncStatusUKP()
- * - Mencari baris di Laporan_Musyrif yang berstatus "MENUNGGU PENANGANAN" (Kolom L)
- * - Mencocokkan Nama_Santri (Kolom F) dengan Nama di Data_UKP (Kolom E)
- * - Pencarian di Data_UKP dilakukan dari baris paling bawah ke atas (Bottom-Up)
- *   agar selalu mengambil tindakan pemeriksaan terbaru.
- * - Jika Kolom Tindakan (P) di Data_UKP sudah terisi, maka:
- *   - Kolom L (Status_Penanganan) -> "SUDAH DITANGANI - [Nama Tindakan]"
- *   - Kolom N (Tindakan_UKP) -> [Nama Tindakan]
- *   - Kolom O (Waktu_Update) -> Stempel Waktu Update
+ * Mencocokkan laporan santri dengan Data_UKP secara KETAT (strict match):
+ * 1. `namaSantri` pada Laporan_Musyrif WAJIB sama persis dengan `nama` pada Data_UKP (`ukpNama === targetNama`)
+ * 2. `tanggalLaporan` pada Laporan_Musyrif WAJIB sama persis dengan `tanggalPemeriksaan` pada Data_UKP (`tglUkp === tglLaporan`)
+ * 3. Kolom `tindakan` pada Data_UKP WAJIB sudah diisi (`ukpTindakan !== ''`)
+ * Status hanya diubah menjadi `SUDAH DITANGANI - <tindakan>` apabila ketiga syarat di atas terpenuhi pada baris Data_UKP.
+ * Jika tidak ada baris di Data_UKP dengan nama DAN tanggal yang persis sama, status ditetapkan sebagai `MENUNGGU PENANGANAN`.
  */
 export function runSyncStatusUKP(
   laporanRows: LaporanMusyrifRow[],
@@ -599,75 +633,71 @@ export function runSyncStatusUKP(
 
   const updatedLaporan = laporanRows.map((laporan) => {
     const currentStatus = laporan.statusPenanganan.trim().toUpperCase();
-    const targetNama = laporan.namaSantri.trim().toLowerCase();
+    const targetNama = normalizePersonName(laporan.namaSantri);
     const tglLaporan = normalizeDateYYYYMMDD(laporan.tanggalLaporan);
 
     if (currentStatus === 'MENUNGGU PENANGANAN') {
       checkedWaitingCount++;
     }
 
-    if (!targetNama) {
-      return laporan;
+    // Jika namaSantri atau tanggalLaporan kosong, tidak boleh dianggap SUDAH DITANGANI
+    if (!targetNama || !tglLaporan) {
+      return {
+        ...laporan,
+        namaSantri: cleanDisplayName(laporan.namaSantri),
+        tanggalLaporan: tglLaporan || laporan.tanggalLaporan,
+        statusPenanganan: 'MENUNGGU PENANGANAN',
+        tindakanUKP: '',
+        waktuUpdate: '',
+      };
     }
 
     // Pencarian Bottom-Up (dari baris paling bawah ke atas di Data_UKP)
-    // WAJIB cocok Nama Santri DAN Tanggal Pemeriksaan UKP >= Tanggal Laporan Musyrif
+    // WAJIB cocok secara ketat: namaSantri === nama DAN tanggalLaporan === tanggalPemeriksaan
     for (let j = ukpRows.length - 1; j >= 0; j--) {
       const ukp = ukpRows[j];
-      const ukpNama = ukp.nama.trim().toLowerCase();
-      const ukpTindakan = ukp.tindakan.trim();
+      const ukpNama = normalizePersonName(ukp.nama);
       const tglUkp = normalizeDateYYYYMMDD(ukp.tanggalPemeriksaan);
+      const ukpTindakan = ukp.tindakan.trim();
 
-      const isDateValid =
-        !tglLaporan || !tglUkp ? true : tglUkp >= tglLaporan;
+      const isExactNameMatch = Boolean(ukpNama && ukpNama === targetNama);
+      const isExactDateMatch = Boolean(tglUkp && tglUkp === tglLaporan);
 
-      if (ukpNama === targetNama && ukpTindakan !== '' && isDateValid) {
-        if (currentStatus !== 'MENUNGGU PENANGANAN') {
-          return laporan;
-        }
+      if (isExactNameMatch && isExactDateMatch && ukpTindakan !== '') {
         const statusBaru = `SUDAH DITANGANI - ${ukpTindakan}`;
-        updatedCount++;
-        logs.push({
-          idLaporan: laporan.idLaporan,
-          namaSantri: laporan.namaSantri,
-          tindakanBaru: ukpTindakan,
-          statusBaru,
-          ukpRowNumber: j + 2, // Baris di Google Sheets (header di baris 1)
-          waktuUpdate: waktuUpdateStr,
-        });
+        if (currentStatus === 'MENUNGGU PENANGANAN') {
+          updatedCount++;
+          logs.push({
+            idLaporan: laporan.idLaporan,
+            namaSantri: cleanDisplayName(laporan.namaSantri),
+            tindakanBaru: ukpTindakan,
+            statusBaru,
+            ukpRowNumber: j + 2, // Baris di Google Sheets (header di baris 1)
+            waktuUpdate: waktuUpdateStr,
+          });
+        }
 
         return {
           ...laporan,
+          namaSantri: cleanDisplayName(laporan.namaSantri),
+          tanggalLaporan: tglLaporan,
           statusPenanganan: statusBaru,
           tindakanUKP: ukpTindakan,
-          waktuUpdate: waktuUpdateStr,
+          waktuUpdate: laporan.waktuUpdate || waktuUpdateStr,
         };
       }
     }
 
-    // Jika sebelumnya terlanjur berstatus SUDAH DITANGANI karena terekam data UKP tanggal lama
-    // (sebelum tanggal laporan), kembalikan ke MENUNGGU PENANGANAN
-    if (
-      currentStatus !== 'MENUNGGU PENANGANAN' &&
-      tglLaporan &&
-      ukpRows.length > 0
-    ) {
-      const hasAnyOldRecordOnly = ukpRows.some(
-        (u) =>
-          u.nama.trim().toLowerCase() === targetNama &&
-          normalizeDateYYYYMMDD(u.tanggalPemeriksaan) < tglLaporan
-      );
-      if (hasAnyOldRecordOnly) {
-        return {
-          ...laporan,
-          statusPenanganan: 'MENUNGGU PENANGANAN',
-          tindakanUKP: '',
-          waktuUpdate: '',
-        };
-      }
-    }
-
-    return laporan;
+    // Tidak ada data pemeriksaan di Data_UKP dengan Nama DAN Tanggal yang sama persis:
+    // Status WAJIB "MENUNGGU PENANGANAN"
+    return {
+      ...laporan,
+      namaSantri: cleanDisplayName(laporan.namaSantri),
+      tanggalLaporan: tglLaporan,
+      statusPenanganan: 'MENUNGGU PENANGANAN',
+      tindakanUKP: '',
+      waktuUpdate: '',
+    };
   });
 
   return {
@@ -769,6 +799,32 @@ export function filterLaporanByDateRange(
     if (start && tgl < start) return false;
     if (end && tgl > end) return false;
     return true;
+  });
+}
+
+/**
+ * Memfilter daftar laporan berdasarkan pencarian nama santri (serta mendukung ID santri / kelas / kamar)
+ */
+export function filterLaporanBySantriName(
+  laporanRows: LaporanMusyrifRow[],
+  query: string
+): LaporanMusyrifRow[] {
+  const cleanQuery = normalizePersonName(query);
+  if (!cleanQuery) {
+    return laporanRows;
+  }
+
+  return laporanRows.filter((row) => {
+    const nama = normalizePersonName(row.namaSantri);
+    const id = String(row.idSantri || '').trim().toLowerCase();
+    const kelas = String(row.kelas || '').trim().toLowerCase();
+    const kamar = String(row.kamar || '').trim().toLowerCase();
+    return (
+      nama.includes(cleanQuery) ||
+      id.includes(cleanQuery) ||
+      kelas.includes(cleanQuery) ||
+      kamar.includes(cleanQuery)
+    );
   });
 }
 
@@ -906,8 +962,53 @@ export function getTodayDateISO(now: Date = new Date()): string {
   return `${y}-${m}-${d}`;
 }
 
+const MONTH_NAME_MAP: Record<string, string> = {
+  januari: '01',
+  january: '01',
+  jan: '01',
+  februari: '02',
+  pebruari: '02',
+  february: '02',
+  feb: '02',
+  peb: '02',
+  maret: '03',
+  march: '03',
+  mar: '03',
+  april: '04',
+  apr: '04',
+  mei: '05',
+  may: '05',
+  juni: '06',
+  june: '06',
+  jun: '06',
+  juli: '07',
+  july: '07',
+  jul: '07',
+  agustus: '08',
+  august: '08',
+  agu: '08',
+  ags: '08',
+  agst: '08',
+  aug: '08',
+  september: '09',
+  sept: '09',
+  sep: '09',
+  oktober: '10',
+  october: '10',
+  okt: '10',
+  oct: '10',
+  november: '11',
+  nopember: '11',
+  nov: '11',
+  nop: '11',
+  desember: '12',
+  december: '12',
+  des: '12',
+  dec: '12',
+};
+
 /**
- * Menormalkan berbagai format tanggal (DD/MM/YYYY, DD-MM-YYYY, YYYY/MM/DD, ISO) menjadi YYYY-MM-DD
+ * Menormalkan berbagai format tanggal (DD/MM/YYYY, DD-MM-YYYY, YYYY/MM/DD, "10 November 2026", ISO) menjadi YYYY-MM-DD
  */
 export function normalizeDateYYYYMMDD(raw: string): string {
   const clean = String(raw || '').trim();
@@ -942,7 +1043,71 @@ export function normalizeDateYYYYMMDD(raw: string): string {
     return `${y}-${m}-${d}`;
   }
 
+  // Format teks nama bulan Indonesia/Inggris: "09 November 2026", "9 Nov 2026", "9-Nov-2026"
+  const textMonthMatch = clean.match(
+    /^(\d{1,2})[\s/-]+([a-zA-Z]+)[\s,/-]+(\d{4})/
+  );
+  if (textMonthMatch) {
+    const d = textMonthMatch[1].padStart(2, '0');
+    const monthKey = textMonthMatch[2].toLowerCase();
+    const m = MONTH_NAME_MAP[monthKey];
+    const y = textMonthMatch[3];
+    if (m) {
+      return `${y}-${m}-${d}`;
+    }
+  }
+
+  // Format "November 10, 2026"
+  const usTextMonthMatch = clean.match(
+    /^([a-zA-Z]+)[\s/-]+(\d{1,2}),?[\s/-]+(\d{4})/
+  );
+  if (usTextMonthMatch) {
+    const monthKey = usTextMonthMatch[1].toLowerCase();
+    const m = MONTH_NAME_MAP[monthKey];
+    const d = usTextMonthMatch[2].padStart(2, '0');
+    const y = usTextMonthMatch[3];
+    if (m) {
+      return `${y}-${m}-${d}`;
+    }
+  }
+
   return clean;
+}
+
+/**
+ * Menghasilkan kunci unik untuk satu baris laporan Musyrif agar penghapusan tetap presisi
+ */
+export function getLaporanRowKey(row: LaporanMusyrifRow): string {
+  const id = String(row.idLaporan || '').trim();
+  const ts = String(row.timestamp || '').trim();
+  const nama = normalizePersonName(row.namaSantri);
+  const tgl = normalizeDateYYYYMMDD(row.tanggalLaporan);
+  return `${id}||${ts}||${nama}||${tgl}`;
+}
+
+/**
+ * Mendeteksi baris laporan yang merupakan double input (santri yang sama dilaporkan lebih dari 1 kali pada tanggal yang sama)
+ */
+export function findDuplicateLaporanKeys(
+  laporanRows: LaporanMusyrifRow[]
+): Set<string> {
+  const countsByDateAndSantri = new Map<string, number>();
+  for (const row of laporanRows) {
+    const groupKey = `${normalizeDateYYYYMMDD(row.tanggalLaporan)}||${normalizePersonName(row.namaSantri)}`;
+    countsByDateAndSantri.set(
+      groupKey,
+      (countsByDateAndSantri.get(groupKey) || 0) + 1
+    );
+  }
+
+  const duplicateKeys = new Set<string>();
+  for (const row of laporanRows) {
+    const groupKey = `${normalizeDateYYYYMMDD(row.tanggalLaporan)}||${normalizePersonName(row.namaSantri)}`;
+    if ((countsByDateAndSantri.get(groupKey) || 0) > 1) {
+      duplicateKeys.add(getLaporanRowKey(row));
+    }
+  }
+  return duplicateKeys;
 }
 
 export interface DatePresetItem {

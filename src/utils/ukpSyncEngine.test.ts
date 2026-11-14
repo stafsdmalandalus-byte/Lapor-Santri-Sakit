@@ -11,6 +11,7 @@ import {
   calculateReportOverview,
   buildReportStatusPieData,
   filterLaporanByDateRange,
+  filterLaporanBySantriName,
   generateDailyWhatsAppReport,
   splitLaporanByHandlingStatus,
   authenticateUserRole,
@@ -20,10 +21,25 @@ import {
   normalizeDateYYYYMMDD,
   getDynamicDatePresets,
   generateDailyHealthCsvReport,
+  findDuplicateLaporanKeys,
+  getLaporanRowKey,
   type LaporanMusyrifRow,
   type DataUKPRow,
 } from './ukpSyncEngine';
 import { normalizeUsersRoleList, cleanGasWebAppUrl } from './gasClient';
+import {
+  INITIAL_PERIZINAN_DATA,
+  getIndonesianDayName,
+  calculateDurationDays,
+  createPerizinanRow,
+  getPerizinanStatus,
+  calculatePerizinanOverview,
+  generatePerizinanWhatsAppReport,
+  searchSantriForPerizinan,
+  formatSuratDateIndo,
+  getSuratIzinFileName,
+  generateSingleSuratWhatsAppPayload,
+} from './perizinanEngine';
 
 test('searchMasterSantri finds santri by name, ID, class, or room case-insensitively', () => {
   const byName = searchMasterSantri('fauzan', INITIAL_MASTER_DATA);
@@ -481,3 +497,218 @@ test('runSyncStatusUKP ignores old Data_UKP records (tanggalPemeriksaan < tangga
     'SUDAH DITANGANI - Obat Maag & Istirahat'
   );
 });
+
+test('normalizeDateYYYYMMDD parses Indonesian month names and runSyncStatusUKP enforces exact same date (tglUkp === tglLaporan) and strips invisible characters', () => {
+  assert.equal(normalizeDateYYYYMMDD('10 November 2026'), '2026-11-10');
+  assert.equal(normalizeDateYYYYMMDD('09 November 2026'), '2026-11-09');
+  assert.equal(normalizeDateYYYYMMDD('24 September 2026'), '2026-09-24');
+  assert.equal(normalizeDateYYYYMMDD('15 Oktober 2026'), '2026-10-15');
+
+  const laporan10Nov: LaporanMusyrifRow[] = [
+    {
+      idLaporan: 'LP-20261110-001',
+      timestamp: '2026-11-10 06:51:43',
+      tanggalLaporan: '2026-11-10',
+      namaMusyrif: 'Hamzah Rantisi',
+      idSantri: 'SAN-284',
+      namaSantri: '⁠Faiz Fathur Rizqi', // contains leading U+2060 Word Joiner
+      kelas: '10-B',
+      kamar: 'Gharnatah - 5',
+      keluhanUtama: 'Batuk, pusing, ga enak badan',
+      statusPenanganan: 'SUDAH DITANGANI - Rawat Jalan',
+      tindakanUKP: 'Rawat Jalan',
+      waktuUpdate: '10/11/2026 07:00:00',
+    },
+  ];
+
+  // Data_UKP hanya memiliki riwayat tanggal 24 September 2026 dan 09 November 2026 (bukan 10 November 2026)
+  const ukpDifferentDates: DataUKPRow[] = [
+    {
+      idRow: 'UKP-35',
+      tanggalPemeriksaan: '24 September 2026',
+      nama: 'Faiz Fathur Rizqi',
+      keluhan: 'Pusing, demam',
+      tindakan: 'Rawat Jalan',
+    },
+    {
+      idRow: 'UKP-180',
+      tanggalPemeriksaan: '09 November 2026',
+      nama: 'Faiz Fathur Rizqi',
+      keluhan: 'Batuk',
+      tindakan: 'Rawat Jalan',
+    },
+  ];
+
+  const syncedNotSameDay = runSyncStatusUKP(laporan10Nov, ukpDifferentDates);
+  assert.equal(
+    syncedNotSameDay.updatedLaporan[0].statusPenanganan,
+    'MENUNGGU PENANGANAN'
+  );
+  assert.equal(syncedNotSameDay.updatedLaporan[0].tindakanUKP, '');
+
+  // Ketika Data_UKP memiliki pemeriksaan pada tanggal yang persis sama (10 November 2026)
+  const ukpSameDay: DataUKPRow[] = [
+    ...ukpDifferentDates,
+    {
+      idRow: 'UKP-195',
+      tanggalPemeriksaan: '10 November 2026',
+      nama: 'Faiz Fathur Rizqi',
+      keluhan: 'Batuk, pusing',
+      tindakan: 'Rawat Jalan & Obat Batuk',
+    },
+  ];
+
+  const syncedSameDay = runSyncStatusUKP(
+    syncedNotSameDay.updatedLaporan,
+    ukpSameDay
+  );
+  assert.equal(
+    syncedSameDay.updatedLaporan[0].statusPenanganan,
+    'SUDAH DITANGANI - Rawat Jalan & Obat Batuk'
+  );
+});
+
+test('findDuplicateLaporanKeys detects double input of the same santri on the same date', () => {
+  const rows: LaporanMusyrifRow[] = [
+    {
+      idLaporan: 'LP-20261110-001',
+      timestamp: '2026-11-10 06:51:00',
+      tanggalLaporan: '2026-11-10',
+      idSantri: 'SAN-284',
+      namaSantri: '⁠Faiz Fathur Rizqi',
+      kelas: '10-B',
+      kamar: 'Gharnatah - 5',
+      keluhanUtama: 'Batuk, pusing',
+      statusPenanganan: 'MENUNGGU PENANGANAN',
+      tindakanUKP: '',
+      waktuUpdate: '',
+    },
+    {
+      idLaporan: 'LP-20261110-002',
+      timestamp: '2026-11-10 06:53:00',
+      tanggalLaporan: '2026-11-10',
+      idSantri: 'SAN-284',
+      namaSantri: 'Faiz Fathur Rizqi',
+      kelas: '10-B',
+      kamar: 'Gharnatah - 5',
+      keluhanUtama: 'Batuk, pusing',
+      statusPenanganan: 'MENUNGGU PENANGANAN',
+      tindakanUKP: '',
+      waktuUpdate: '',
+    },
+  ];
+
+  const dupKeys = findDuplicateLaporanKeys(rows);
+  assert.equal(dupKeys.has(getLaporanRowKey(rows[0])), true);
+  assert.equal(dupKeys.has(getLaporanRowKey(rows[1])), true);
+});
+
+test('filterLaporanBySantriName filters reports by santri name case-insensitively and strips invisible characters', () => {
+  const all = filterLaporanBySantriName(INITIAL_LAPORAN_MUSYRIF, '');
+  assert.equal(all.length, 5);
+
+  const zaidan = filterLaporanBySantriName(INITIAL_LAPORAN_MUSYRIF, 'zaidan');
+  assert.equal(zaidan.length, 1);
+  assert.equal(zaidan[0].namaSantri, 'Muhammad Zaidan Al-Ghifari');
+
+  const noMatch = filterLaporanBySantriName(
+    INITIAL_LAPORAN_MUSYRIF,
+    'Nama Tidak Ada'
+  );
+  assert.equal(noMatch.length, 0);
+});
+
+test('perizinanEngine calculates duration, day names, status, and WhatsApp report accurately', () => {
+  assert.equal(getIndonesianDayName('2026-11-06'), "Jum'at");
+  assert.equal(getIndonesianDayName('2026-11-08'), 'Ahad');
+  assert.equal(getIndonesianDayName('2026-11-09'), 'Senin');
+  assert.equal(calculateDurationDays('2026-11-06', '2026-11-09'), '3 Hari');
+
+  const newRow = createPerizinanRow(
+    {
+      nama: 'Adryan Octwind Dipo Alam',
+      kelas: '11-E',
+      gedung: 'Abd al-Rahman al-Dakhil',
+      kamar: 'Isybiliyyah - 2',
+      izin: 'Kontrol rutin ke Dokter',
+      keterangan: 'Kontrol kesehatan',
+      tujuan: 'Dokter',
+      rekomendasi: 'Dokter',
+      dariTanggal: '2026-11-06',
+      dariJam: '08:00',
+      sampaiTanggal: '2026-11-09',
+      sampaiJam: '17:00',
+      pengasuh1: 'Abdi Alhalim',
+      pengasuh2: 'Supandi',
+    },
+    37
+  );
+
+  assert.equal(newRow.no, '37');
+  assert.equal(newRow.dariHari, "Jum'at");
+  assert.equal(newRow.sampaiHari, 'Senin');
+  assert.equal(newRow.durasi, '3 Hari');
+  assert.equal(newRow.bulan, 'November');
+  assert.equal(getPerizinanStatus(newRow, '2026-11-10'), 'OVERDUE');
+
+  const returnedRow = { ...newRow, tibaTanggal: '2026-11-09' };
+  assert.equal(getPerizinanStatus(returnedRow, '2026-11-10'), 'RETURNED');
+
+  const overview = calculatePerizinanOverview(
+    INITIAL_PERIZINAN_DATA,
+    '2026-11-10'
+  );
+  assert.equal(overview.total, INITIAL_PERIZINAN_DATA.length);
+  assert.equal(overview.returned, 5);
+
+  const wa = generatePerizinanWhatsAppReport(
+    INITIAL_PERIZINAN_DATA,
+    '2026-11-10',
+    'ACTIVE_ONLY',
+    '081234567890',
+    '2026-11-10'
+  );
+  assert.equal(wa.text.includes('*LAPORAN PERIZINAN PULANG SANTRI*'), true);
+  assert.equal(wa.waUrl.startsWith('https://wa.me/6281234567890?text='), true);
+
+  const profiles = searchSantriForPerizinan('Adryan', INITIAL_MASTER_DATA);
+  assert.equal(profiles.length, 1);
+  assert.equal(profiles[0].kelas, '11-E');
+  assert.equal(profiles[0].kamar, 'Isybiliyyah - 2');
+
+  // Test Nama Surat Otomatis (Nama Anak + Kelas) & Format Tanggal Surat
+  assert.equal(formatSuratDateIndo('2026-09-16'), '16 September 2026');
+  assert.equal(
+    getSuratIzinFileName({ nama: 'Khosyi Arkana Wicaksono', kelas: '7A' }),
+    'Khosyi Arkana Wicaksono - 7A'
+  );
+  assert.equal(
+    getSuratIzinFileName(
+      { nama: 'Khosyi Arkana Wicaksono', kelas: '7A' },
+      'png'
+    ),
+    'Khosyi Arkana Wicaksono - 7A.png'
+  );
+
+  const singleWa = generateSingleSuratWhatsAppPayload(
+    newRow,
+    '081234567890',
+    'Ust. Abdul Aziz',
+    'Ust. Muhammad Awly Yusuf M, S.Pd.'
+  );
+  assert.equal(singleWa.suratName, 'Adryan Octwind Dipo Alam - 11-E');
+  assert.equal(singleWa.fileNamePng, 'Adryan Octwind Dipo Alam - 11-E.png');
+  assert.equal(
+    singleWa.text.includes('Adryan Octwind Dipo Alam - 11-E'),
+    true
+  );
+  assert.equal(singleWa.text.includes('Ust. Abdul Aziz'), true);
+  assert.equal(
+    singleWa.text.includes('Ust. Muhammad Awly Yusuf M, S.Pd.'),
+    true
+  );
+});
+
+
+
+
