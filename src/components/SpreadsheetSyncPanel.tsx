@@ -22,6 +22,7 @@ import {
   getLaporanRowKey,
 } from '../utils/ukpSyncEngine';
 import { type PerizinanRow } from '../utils/perizinanEngine';
+import { type SholatRow, isSholatRowPutih } from '../utils/sholatEngine';
 import { type ReportStatusFilter } from './ReportOverview';
 
 interface SpreadsheetSyncPanelProps {
@@ -45,6 +46,7 @@ interface SpreadsheetSyncPanelProps {
   hideUsersRoleTab?: boolean;
   onDeleteLaporan?: (row: LaporanMusyrifRow) => void;
   perizinanList?: PerizinanRow[];
+  sholatList?: SholatRow[];
 }
 
 export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
@@ -61,9 +63,15 @@ export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
   hideUsersRoleTab = false,
   onDeleteLaporan,
   perizinanList = [],
+  sholatList = [],
 }) => {
   const [activeSheet, setActiveSheet] = useState<
-    'Laporan_Musyrif' | 'Data_UKP' | 'Master_Data' | 'users_role' | 'Perizinan'
+    | 'Laporan_Musyrif'
+    | 'Data_UKP'
+    | 'Master_Data'
+    | 'users_role'
+    | 'Perizinan'
+    | 'Rekap_Sholat'
   >('Laporan_Musyrif');
 
   const duplicateKeys = useMemo(
@@ -173,6 +181,22 @@ export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
               >
                 <Home className="w-3.5 h-3.5 shrink-0" />
                 <span>5. Perizinan ({perizinanList.length})</span>
+              </button>
+
+              <button
+                type="button"
+                role="tab"
+                data-testid="tab-sheet-rekap-sholat"
+                aria-selected={activeSheet === 'Rekap_Sholat'}
+                onClick={() => setActiveSheet('Rekap_Sholat')}
+                className={`min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+                  activeSheet === 'Rekap_Sholat'
+                    ? 'bg-white text-emerald-800 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5 shrink-0" />
+                <span>6. Rekap_Sholat ({sholatList.length})</span>
               </button>
             </div>
 
@@ -601,6 +625,100 @@ export const SpreadsheetSyncPanel: React.FC<SpreadsheetSyncPanelProps> = ({
                       </td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* SHEET 6: REKAP_SHOLAT (15 Kolom A-O) */}
+        {activeSheet === 'Rekap_Sholat' && (
+          <div className="space-y-4" data-testid="sheet-rekap-sholat-panel">
+            <div className="text-xs text-slate-600 bg-emerald-50/60 border border-emerald-200/80 rounded-2xl p-3.5">
+              <p className="font-semibold text-emerald-950">
+                Sheet <span className="font-mono">Rekap_Sholat</span> (15 Kolom A–O · Rekap Keterlambatan Sholat 5 Waktu):
+              </p>
+              <p className="mt-0.5 text-slate-600">
+                Menyimpan rekapan keterlambatan sholat santri di Google Spreadsheet. Saat dilakukan <strong>Reset / Pemutihan</strong> dengan password login, baris di Spreadsheet tidak dihapus melainkan <strong>Kolom O (<code>Keterangan</code>)</strong> otomatis diperbarui menjadi <code>DIPUTIHKAN (...)</code> sehingga hitungan telat aktif kembali ke 0 namun histori di Spreadsheet tetap tercatat.
+              </p>
+            </div>
+
+            <div className="overflow-x-auto rounded-2xl border border-slate-200">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-600">
+                    <th className="py-2.5 px-3 font-mono">Kol A/B · ID &amp; Tanggal</th>
+                    <th className="py-2.5 px-3">Kol C/D/E/F/G · Santri, Kelas &amp; Kamar</th>
+                    <th className="py-2.5 px-3 text-center">Kol H–L · 5 Waktu Sholat</th>
+                    <th className="py-2.5 px-3">Kol M/N · Pencatat &amp; Waktu</th>
+                    <th className="py-2.5 px-3">Kol O · Keterangan (Status Pemutihan)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-xs">
+                  {sholatList.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-8 text-center text-slate-500">
+                        Belum ada data di sheet Rekap_Sholat.
+                      </td>
+                    </tr>
+                  ) : (
+                    sholatList.map((row, idx) => {
+                      const isPutih = isSholatRowPutih(row);
+                      return (
+                        <tr
+                          key={`${row.idSholat}-${idx}`}
+                          className={`hover:bg-slate-50/80 transition align-top ${
+                            isPutih ? 'bg-amber-50/30' : ''
+                          }`}
+                        >
+                          <td className="py-2.5 px-3 font-mono text-[11px] text-slate-700">
+                            <div className="font-bold text-slate-900">{row.idSholat}</div>
+                            <div className="text-slate-500">Tgl: {row.tanggal}</div>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <div className="font-semibold text-slate-900">{row.namaSantri}</div>
+                            <div className="text-[11px] text-slate-500">
+                              NIS: {row.nis} · Kelas {row.kelas} · {row.kamar}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 font-mono text-[11px]">
+                            <div className="flex flex-wrap items-center justify-center gap-1.5">
+                              <span className={`px-1.5 py-0.5 rounded ${row.subuh === 'TELAT' ? 'bg-rose-100 text-rose-800 font-bold' : 'bg-slate-100 text-slate-600'}`}>
+                                Subuh: {row.subuh}
+                              </span>
+                              <span className={`px-1.5 py-0.5 rounded ${row.dzuhur === 'TELAT' ? 'bg-rose-100 text-rose-800 font-bold' : 'bg-slate-100 text-slate-600'}`}>
+                                Dzuhur: {row.dzuhur}
+                              </span>
+                              <span className={`px-1.5 py-0.5 rounded ${row.ashar === 'TELAT' ? 'bg-rose-100 text-rose-800 font-bold' : 'bg-slate-100 text-slate-600'}`}>
+                                Ashar: {row.ashar}
+                              </span>
+                              <span className={`px-1.5 py-0.5 rounded ${row.maghrib === 'TELAT' ? 'bg-rose-100 text-rose-800 font-bold' : 'bg-slate-100 text-slate-600'}`}>
+                                Maghrib: {row.maghrib}
+                              </span>
+                              <span className={`px-1.5 py-0.5 rounded ${row.isya === 'TELAT' ? 'bg-rose-100 text-rose-800 font-bold' : 'bg-slate-100 text-slate-600'}`}>
+                                Isya: {row.isya}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-[11px] text-slate-600">
+                            <div className="font-medium text-slate-800">{row.pencatat}</div>
+                            <div className="font-mono text-[10px] text-slate-400">{row.timestamp}</div>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            {isPutih ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-100 text-amber-900 border border-amber-300 text-[11px] font-bold">
+                                ✨ {row.keterangan}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-[11px] font-semibold">
+                                {row.keterangan || 'AKTIF'}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>

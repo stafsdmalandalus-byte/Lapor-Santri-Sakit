@@ -164,26 +164,17 @@ export const MusyrifRolePortal: React.FC<MusyrifRolePortalProps> = ({
   // TAMPILAN 1: HALAMAN LOGIN SEDERHANA (Ketik Nama Rekomendasi + Password -> Masuk Otomatis Sesuai Role di users_role)
   if (!activeMusyrif) {
     return (
-      <div className="max-w-md mx-auto">
-        {/* Logo Pesantren Al-Andalus di bagian atas di luar kotak login */}
-        <div className="flex justify-center mb-5" data-testid="login-top-logo">
-          <img
-            src={logoUrl}
-            alt="Logo Pesantren Al-Andalus"
-            className="h-28 sm:h-32 w-auto object-contain"
-          />
-        </div>
-
+      <div className="max-w-md mx-auto py-4">
         <div
           data-testid="musyrif-login-card"
-          className="bg-white rounded-3xl shadow-md border border-[#D4AF37]/45 overflow-hidden"
+          className="bg-white rounded-3xl shadow-xl border border-[#D4AF37]/50 overflow-hidden"
         >
-          {/* Header Tampilan Awal Masuk dengan Nuansa Andalusia */}
-          <div className="relative overflow-hidden bg-gradient-to-br from-[#07361D] via-[#0B4627] to-[#052613] text-white px-6 py-6 text-center border-b-2 border-[#D4AF37]/60">
+          {/* Header WhatsApp Green Theme */}
+          <div className="relative overflow-hidden bg-gradient-to-br from-[#075e54] via-[#00a884] to-[#054c42] text-white px-6 pt-8 pb-7 text-center border-b-2 border-emerald-300/40">
             {/* Ornamen Geometri Rub el Hizb Andalusia */}
             <svg
               aria-hidden="true"
-              className="pointer-events-none absolute -right-10 -top-10 w-44 h-44 text-[#F5D000]/10"
+              className="pointer-events-none absolute -right-10 -top-10 w-44 h-44 text-white/10"
               viewBox="0 0 120 120"
               fill="none"
             >
@@ -206,38 +197,43 @@ export const MusyrifRolePortal: React.FC<MusyrifRolePortalProps> = ({
                 strokeWidth="1.8"
               />
             </svg>
-            <svg
-              aria-hidden="true"
-              className="pointer-events-none absolute -left-10 -bottom-10 w-36 h-36 text-[#F5D000]/10"
-              viewBox="0 0 120 120"
-              fill="none"
-            >
-              <circle cx="60" cy="60" r="46" stroke="currentColor" strokeWidth="2" />
-              <rect
-                x="28"
-                y="28"
-                width="64"
-                height="64"
-                transform="rotate(45 60 60)"
-                stroke="currentColor"
-                strokeWidth="1.8"
-              />
-            </svg>
+
+            {/* Logo Pesantren di dalam Kotak Putih Elegan */}
+            <div className="relative z-10 flex justify-center mb-4" data-testid="login-top-logo">
+              <div className="w-20 h-20 rounded-2xl bg-white p-2 shadow-md border border-emerald-200 flex items-center justify-center">
+                <img
+                  src={logoUrl}
+                  alt="Logo Pesantren Al-Andalus"
+                  className="w-full h-full object-contain"
+                />
+              </div>
+            </div>
 
             <div className="relative z-10 flex flex-col items-center">
-              <p className="text-xs font-semibold tracking-wider uppercase text-[#F5D000]">
-                Pesantren Al-Andalus
-              </p>
-              <h2 className="text-lg font-bold tracking-tight text-white mt-0.5">
-                Portal Lapor Sakit Santri
+              <h2 className="text-base sm:text-lg font-extrabold tracking-tight uppercase text-white leading-snug">
+                PORTAL LAPOR SAKIT &amp; PERIZINAN PULANG
               </h2>
-              <p className="text-[11px] text-emerald-100/90 mt-1">
-                Terintegrasi Unit Kesehatan Pesantren (UKP)
+              <p className="text-xs font-semibold tracking-wider text-emerald-100 mt-1">
+                PESANTREN ISLAM INTERNASIONAL AL-ANDALUS
               </p>
             </div>
           </div>
 
-          <form onSubmit={handleLoginSubmit} className="p-6 space-y-4 bg-[#FAF8F2]/40">
+          <form onSubmit={handleLoginSubmit} className="p-6 space-y-4 bg-[#f0f2f5]">
+            <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 p-3.5 rounded-2xl">
+              <div className="w-9 h-9 rounded-xl bg-[#00a884] text-white flex items-center justify-center shrink-0 shadow-xs">
+                <UserCheck className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h3 className="text-xs font-bold text-emerald-950">
+                  Masuk Akun Pengguna / Musyrif
+                </h3>
+                <p className="text-[11px] text-emerald-800">
+                  Ketik nama Anda, pilih akun, lalu masukkan password
+                </p>
+              </div>
+            </div>
+
             {/* Ketik Nama dengan Rekomendasi Otomatis (Autocomplete dari Kolom nama di Sheet users_role) */}
             <div ref={namaDropdownRef} className="relative">
               <label
@@ -408,9 +404,9 @@ export const MusyrifRolePortal: React.FC<MusyrifRolePortalProps> = ({
             <button
               type="submit"
               data-testid="btn-login-musyrif"
-              className="w-full min-h-[46px] rounded-xl bg-[#0B4627] hover:bg-[#08361E] text-white font-semibold text-sm px-5 py-2.5 shadow-sm transition flex items-center justify-center gap-2 cursor-pointer"
+              className="w-full min-h-[46px] rounded-xl bg-[#00a884] hover:bg-[#008f72] text-white font-semibold text-sm px-5 py-2.5 shadow-sm transition flex items-center justify-center gap-2 cursor-pointer"
             >
-              <UserCheck className="w-4 h-4 text-[#F5D000]" />
+              <UserCheck className="w-4 h-4 text-white" />
               <span>Masuk</span>
             </button>
           </form>

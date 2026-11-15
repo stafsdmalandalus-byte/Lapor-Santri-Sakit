@@ -17,6 +17,7 @@ import {
   parsePerpanjanganInfo,
   type PerizinanRow,
 } from './perizinanEngine';
+import { type SholatRow } from './sholatEngine';
 
 const STORAGE_KEY_GAS_URL = 'alandalus_gas_webapp_url_v1';
 const STORAGE_KEY_DELETED_LAPORAN = 'alandalus_deleted_laporan_keys_v1';
@@ -107,6 +108,7 @@ export interface GasAllDataResponse {
   ukpList?: DataUKPRow[];
   usersRoleList?: UserRoleRow[];
   perizinanList?: PerizinanRow[];
+  sholatList?: SholatRow[];
   lastSyncTime?: string;
 }
 
@@ -391,6 +393,13 @@ function normalizeAllDataResponse(data: GasAllDataResponse): GasAllDataResponse 
 
         return baseRow;
       });
+  }
+  if (Array.isArray(data.sholatList)) {
+    data.sholatList = data.sholatList.map((s) => ({
+      ...s,
+      namaSantri: cleanDisplayName(s.namaSantri),
+      tanggal: normalizeDateYYYYMMDD(s.tanggal),
+    }));
   }
   return data;
 }
@@ -772,6 +781,43 @@ export async function deletePerizinanFromGas(
     no: row.no,
     nama: row.nama,
     dariTanggal: row.dariTanggal,
+  });
+}
+
+export async function postSholatToGas(
+  gasUrl: string,
+  row: SholatRow
+): Promise<{ status: string; sholatList?: SholatRow[]; message?: string }> {
+  if (!gasUrl.trim()) return { status: 'success' };
+  return postActionToGas(gasUrl, {
+    action: 'simpanSholat',
+    ...row,
+  });
+}
+
+export async function deleteSholatFromGas(
+  gasUrl: string,
+  idSholat: string
+): Promise<{ status: string; deleted?: boolean; message?: string }> {
+  if (!gasUrl.trim()) return { status: 'success', deleted: true };
+  return postActionToGas(gasUrl, {
+    action: 'deleteSholat',
+    idSholat,
+  });
+}
+
+export async function resetSholatRangeInGas(
+  gasUrl: string,
+  startDate: string,
+  endDate: string,
+  keterangan: string
+): Promise<{ status: string; updatedCount?: number; message?: string }> {
+  if (!gasUrl.trim()) return { status: 'success' };
+  return postActionToGas(gasUrl, {
+    action: 'resetSholatRange',
+    startDate,
+    endDate,
+    keterangan,
   });
 }
 

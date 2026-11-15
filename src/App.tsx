@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Swal from 'sweetalert2';
-import { UserCheck } from 'lucide-react';
+import { UserCheck, Menu, X, BarChart3, MessageSquare, FileText, Home, Database, Settings } from 'lucide-react';
 import {
   INITIAL_MASTER_DATA,
   INITIAL_LAPORAN_MUSYRIF,
@@ -34,6 +34,14 @@ import {
   type ReportStatusFilter,
 } from './components/ReportOverview';
 import { PerizinanPulangPanel } from './components/PerizinanPulangPanel';
+import { RekapSholatPanel } from './components/RekapSholatPanel';
+import {
+  getSavedSholatList,
+  saveSholatListLocally,
+  createSholatRow,
+  type SholatRow,
+  type SholatInput,
+} from './utils/sholatEngine';
 import {
   createPerizinanRow,
   getPerizinanRowKey,
@@ -54,22 +62,26 @@ import {
   updatePerizinanTibaInGas,
   extendPerizinanInGas,
   deletePerizinanFromGas,
+  postSholatToGas,
+  deleteSholatFromGas,
+  resetSholatRangeInGas,
 } from './utils/gasClient';
 
 const LOGO_URL = '/assets/aistudio/Logo_Al-Andalus_c7d889d5.png';
 
 type AdminMenuTab =
-  | 'overview'
-  | 'wa'
-  | 'input'
+  | 'hub'
+  | 'sakit'
   | 'perizinan'
+  | 'sholat'
   | 'spreadsheet'
   | 'kode';
 
 export default function App() {
   const [userRole, setUserRole] = useState<UserRole>('MUSYRIF');
   const [activeMusyrif, setActiveMusyrif] = useState<MusyrifProfile | null>(null);
-  const [adminTab, setAdminTab] = useState<AdminMenuTab>('overview');
+  const [adminTab, setAdminTab] = useState<AdminMenuTab>('hub');
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
 
   const [gasWebAppUrl, setGasWebAppUrl] = useState<string>(() =>
     getSavedGasUrl()
@@ -93,6 +105,51 @@ export default function App() {
   const [perizinanList, setPerizinanList] = useState<PerizinanRow[]>(() =>
     getSavedPerizinanList()
   );
+  const [sholatList, setSholatList] = useState<SholatRow[]>(() =>
+    getSavedSholatList()
+  );
+
+  const handleAddSholat = async (input: SholatInput) => {
+    const newRow = createSholatRow(input);
+    const updated = [newRow, ...sholatList];
+    setSholatList(updated);
+    saveSholatListLocally(updated);
+    if (gasWebAppUrl) {
+      postSholatToGas(gasWebAppUrl, newRow).catch(() => {});
+    }
+  };
+
+  const handleDeleteSholat = async (idSholat: string) => {
+    const updated = sholatList.filter((r) => r.idSholat !== idSholat);
+    setSholatList(updated);
+    saveSholatListLocally(updated);
+    if (gasWebAppUrl) {
+      deleteSholatFromGas(gasWebAppUrl, idSholat).catch(() => {});
+    }
+  };
+
+  const handleResetSholatRange = async (
+    start: string,
+    end: string,
+    keterangan: string
+  ) => {
+    const updated = sholatList.map((r) => {
+      const tgl = r.tanggal || '';
+      if (!tgl) return r;
+      if (start && tgl < start) return r;
+      if (end && tgl > end) return r;
+      return {
+        ...r,
+        keterangan: keterangan || 'DIPUTIHKAN',
+      };
+    });
+    setSholatList(updated);
+    saveSholatListLocally(updated);
+    if (gasWebAppUrl) {
+      resetSholatRangeInGas(gasWebAppUrl, start, end, keterangan).catch(() => {});
+    }
+  };
+
   const [syncLogs, setSyncLogs] = useState<SyncLogItem[]>([]);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(() =>
     formatTimestampID(new Date())
@@ -104,7 +161,7 @@ export default function App() {
   });
   const [autoTriggerEnabled, setAutoTriggerEnabled] = useState<boolean>(false);
 
-  // Fungsi menarik seluruh data 5 sheet (Master_Data, Laporan_Musyrif, Data_UKP, users_role, Perizinan) dari Google Sheets
+  // Fungsi menarik seluruh data sheet (Master_Data, Laporan_Musyrif, Data_UKP, users_role, Perizinan, Rekap_Sholat) dari Google Sheets
   const pullFromGasSheets = useCallback(
     async (targetUrl: string, showSuccessAlert: boolean = false) => {
       if (!targetUrl.trim()) return;
@@ -131,6 +188,10 @@ export default function App() {
           setPerizinanList(res.perizinanList);
           savePerizinanListLocally(res.perizinanList);
         }
+        if (res.sholatList && res.sholatList.length > 0) {
+          setSholatList(res.sholatList);
+          saveSholatListLocally(res.sholatList);
+        }
         if (res.lastSyncTime) {
           setLastSyncTime(res.lastSyncTime);
         }
@@ -141,7 +202,7 @@ export default function App() {
             title: 'Terhubung ke Google Sheets!',
             html: `<div class="text-xs text-slate-600 space-y-1">
               <p>Data berhasil ditarik langsung dari Google Spreadsheet Anda:</p>
-              <p><b>Master_Data:</b> ${res.masterData?.length ?? 0} santri · <b>Laporan_Musyrif:</b> ${res.laporanList?.length ?? 0} laporan · <b>users_role:</b> ${res.usersRoleList?.length ?? 0} akun</p>
+              <p><b>Master_Data:</b> ${res.masterData?.length ?? 0} santri · <b>Laporan_Musyrif:</b> ${res.laporanList?.length ?? 0} laporan · <b>Rekap_Sholat:</b> ${res.sholatList?.length ?? 0} baris</p>
             </div>`,
             confirmButtonColor: '#0B4627',
           });
@@ -501,7 +562,7 @@ export default function App() {
             activeMusyrif={activeMusyrif}
             onSelectMusyrif={setActiveMusyrif}
             onSwitchToRole={(role) => {
-              setAdminTab('overview');
+              setAdminTab('hub');
               setUserRole(role);
             }}
             usersRoleList={usersRoleList}
@@ -526,167 +587,310 @@ export default function App() {
                 : 'admin-full-portal'
             }
           >
-            {/* Header Bar Identitas Role Admin */}
-            <div className="bg-gradient-to-r from-[#07361D] via-[#0B4627] to-[#07361D] text-white rounded-2xl px-4 py-3.5 border border-[#D4AF37]/50 flex flex-wrap items-center justify-between gap-3 shadow-sm print:hidden">
-              <div className="flex items-center gap-3">
-                <div>
-                  <p className="text-xs font-bold text-[#F5D000]">
-                    {userRole === 'ADMIN_PENGASUHAN'
-                      ? 'Mode Admin Pengasuhan — Pantauan Kesehatan, Analitik & Data Santri'
-                      : 'Mode Admin Pusat / SDM — Akses Penuh Seluruh Sistem, Sheet & Kode.gs'}
+            {/* Left Sidebar Drawer (Di samping kiri dengan titik/garis tiga) */}
+            {isSidebarOpen && (
+              <div className="fixed inset-0 z-50 flex print:hidden">
+                {/* Backdrop */}
+                <div 
+                  className="fixed inset-0 bg-black/50 backdrop-blur-xs transition-opacity"
+                  onClick={() => setIsSidebarOpen(false)}
+                />
+                
+                {/* Sidebar Content */}
+                <div className="relative w-80 max-w-[85vw] bg-[#075e54] text-white shadow-2xl flex flex-col h-full z-10">
+                  <div className="p-5 border-b border-emerald-600/50 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+                        <Menu className="w-5 h-5 text-white" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold text-white">Menu Navigasi Utama</h3>
+                        <p className="text-[11px] text-emerald-100/90">Pesantren Al-Andalus</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsSidebarOpen(false)}
+                      className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <div className="p-4 flex-1 overflow-y-auto space-y-2">
+                    <button
+                      type="button"
+                      onClick={() => { setAdminTab('hub'); setIsSidebarOpen(false); }}
+                      className={`w-full text-left px-4 py-3 rounded-xl text-xs font-bold transition flex items-center gap-3 cursor-pointer ${
+                        adminTab === 'hub' ? 'bg-[#00a884] text-white shadow-sm' : 'text-emerald-100 hover:bg-emerald-800/50'
+                      }`}
+                    >
+                      <Home className="w-5 h-5 text-emerald-200" />
+                      <span>🏛️ Menu Utama (Hub)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => { setAdminTab('sakit'); setIsSidebarOpen(false); }}
+                      className={`w-full text-left px-4 py-3 rounded-xl text-xs font-bold transition flex items-center gap-3 cursor-pointer ${
+                        adminTab === 'sakit' ? 'bg-[#00a884] text-white shadow-sm' : 'text-emerald-100 hover:bg-emerald-800/50'
+                      }`}
+                    >
+                      <FileText className="w-5 h-5 text-emerald-200" />
+                      <span>🏥 Laporan Santri Sakit &amp; UKP</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => { setAdminTab('perizinan'); setIsSidebarOpen(false); }}
+                      className={`w-full text-left px-4 py-3 rounded-xl text-xs font-bold transition flex items-center gap-3 cursor-pointer ${
+                        adminTab === 'perizinan' ? 'bg-[#00a884] text-white shadow-sm' : 'text-emerald-100 hover:bg-emerald-800/50'
+                      }`}
+                    >
+                      <UserCheck className="w-5 h-5 text-emerald-200" />
+                      <span>🏠 Izin Pulang Santri</span>
+                    </button>
+
+                    {(userRole === 'ADMIN_PENGASUHAN' || userRole === 'ADMIN_PUSAT') && (
+                      <button
+                        type="button"
+                        onClick={() => { setAdminTab('sholat'); setIsSidebarOpen(false); }}
+                        className={`w-full text-left px-4 py-3 rounded-xl text-xs font-bold transition flex items-center gap-3 cursor-pointer ${
+                          adminTab === 'sholat' ? 'bg-[#00a884] text-white shadow-sm' : 'text-emerald-100 hover:bg-emerald-800/50'
+                        }`}
+                      >
+                        <span className="text-lg">🕌</span>
+                        <span>Rekap Keterlambatan Sholat</span>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => { setAdminTab('spreadsheet'); setIsSidebarOpen(false); }}
+                      className={`w-full text-left px-4 py-3 rounded-xl text-xs font-bold transition flex items-center gap-3 cursor-pointer ${
+                        adminTab === 'spreadsheet' ? 'bg-[#00a884] text-white shadow-sm' : 'text-emerald-100 hover:bg-emerald-800/50'
+                      }`}
+                    >
+                      <Database className="w-5 h-5 text-emerald-200" />
+                      <span>🗂️ Data Spreadsheet</span>
+                    </button>
+
+                    {userRole === 'ADMIN_PUSAT' && (
+                      <button
+                        type="button"
+                        onClick={() => { setAdminTab('kode'); setIsSidebarOpen(false); }}
+                        className={`w-full text-left px-4 py-3 rounded-xl text-xs font-bold transition flex items-center gap-3 cursor-pointer ${
+                          adminTab === 'kode' ? 'bg-[#00a884] text-white shadow-sm' : 'text-emerald-100 hover:bg-emerald-800/50'
+                        }`}
+                      >
+                        <Settings className="w-5 h-5 text-emerald-200" />
+                        <span>⚙️ Koneksi Sheet &amp; Code.gs</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="p-4 border-t border-emerald-600/50 text-center">
+                    <p className="text-[11px] text-emerald-200">Pesantren Islam Internasional Al-Andalus</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* WhatsApp Contact Header Style (Sederhana & Rapi ala Kontak WA) */}
+            <div className="bg-[#075e54] text-white rounded-2xl px-4 py-3 flex items-center justify-between gap-3 shadow-xs print:hidden">
+              <div className="flex items-center gap-3 min-w-0">
+                <button
+                  type="button"
+                  onClick={() => setIsSidebarOpen(true)}
+                  data-testid="btn-toggle-sidebar"
+                  className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition flex items-center justify-center cursor-pointer shrink-0"
+                  title="Buka Menu (☰)"
+                >
+                  <Menu className="w-5 h-5 text-white" />
+                </button>
+
+                <div className="w-9 h-9 rounded-full bg-emerald-600 flex items-center justify-center shrink-0 text-white font-bold text-xs shadow-inner">
+                  {userRole === 'ADMIN_PENGASUHAN' ? 'AP' : 'SDM'}
+                </div>
+
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-white truncate">
+                    {activeMusyrif?.namaMusyrif || (userRole === 'ADMIN_PENGASUHAN' ? 'Admin Pengasuhan' : 'Admin Pusat / SDM')}
                   </p>
-                  <p className="text-[11px] text-emerald-100/90">
-                    Login sebagai:{' '}
-                    <strong>
-                      {activeMusyrif?.namaMusyrif ||
-                        (userRole === 'ADMIN_PENGASUHAN'
-                          ? 'Admin Pengasuhan'
-                          : 'Admin Pusat / SDM')}
-                    </strong>{' '}
-                    · Pilih menu di bawah untuk berpindah fitur tanpa perlu scroll panjang.
+                  <p className="text-[10px] text-emerald-200 truncate">
+                    {userRole === 'ADMIN_PENGASUHAN' ? 'Online · Pengasuhan Al-Andalus' : 'Online · Akses Penuh SDM & Pusat'}
                   </p>
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-2">
+                {adminTab !== 'hub' && (
+                  <button
+                    type="button"
+                    onClick={() => setAdminTab('hub')}
+                    className="px-3 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white text-[11px] font-semibold transition flex items-center gap-1 shrink-0 cursor-pointer"
+                  >
+                    <span>🏠 Hub Menu</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   data-testid="btn-return-musyrif"
                   onClick={() => {
                     setActiveMusyrif(null);
-                    setAdminTab('overview');
+                    setAdminTab('hub');
                     setUserRole('MUSYRIF');
                   }}
-                  className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-[#D4AF37]/40 text-white text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
+                  className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold transition flex items-center gap-1 shrink-0 cursor-pointer"
                 >
-                  <UserCheck className="w-3.5 h-3.5 text-[#F5D000]" />
+                  <UserCheck className="w-3.5 h-3.5 text-white" />
                   <span>Keluar</span>
                 </button>
               </div>
             </div>
 
-            {/* BAR MENU NAVIGASI (TAB) */}
-            <nav
-              aria-label="Bar Menu Navigasi Admin"
-              data-testid="admin-nav-bar"
-              className="bg-white rounded-2xl p-1.5 shadow-xs border border-[#D4AF37]/40 flex flex-wrap items-center gap-1.5 print:hidden"
-            >
-              <button
-                type="button"
-                data-testid="tab-admin-overview"
-                onClick={() => setAdminTab('overview')}
-                className={`flex-1 min-w-[140px] min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap ${
-                  adminTab === 'overview'
-                    ? 'bg-[#07361D] text-[#F5D000] shadow-xs'
-                    : 'text-slate-700 hover:bg-stone-100'
-                }`}
-              >
-                <span>📊 Report Overview</span>
-              </button>
-
-              <button
-                type="button"
-                data-testid="tab-admin-wa"
-                onClick={() => setAdminTab('wa')}
-                className={`flex-1 min-w-[140px] min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap ${
-                  adminTab === 'wa'
-                    ? 'bg-[#07361D] text-[#F5D000] shadow-xs'
-                    : 'text-slate-700 hover:bg-stone-100'
-                }`}
-              >
-                <span>💬 Laporan Cepat ke WA</span>
-              </button>
-
-              <button
-                type="button"
-                data-testid="tab-admin-input"
-                onClick={() => setAdminTab('input')}
-                className={`flex-1 min-w-[140px] min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap ${
-                  adminTab === 'input'
-                    ? 'bg-[#07361D] text-[#F5D000] shadow-xs'
-                    : 'text-slate-700 hover:bg-stone-100'
-                }`}
-              >
-                <span>📝 Input Laporan Santri</span>
-              </button>
-
-              <button
-                type="button"
-                data-testid="tab-admin-perizinan"
-                onClick={() => setAdminTab('perizinan')}
-                className={`flex-1 min-w-[155px] min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap ${
-                  adminTab === 'perizinan'
-                    ? 'bg-[#07361D] text-[#F5D000] shadow-xs'
-                    : 'text-slate-700 hover:bg-stone-100'
-                }`}
-              >
-                <span>🏠 Izin Pulang &amp; Surat Izin</span>
-              </button>
-
-              <button
-                type="button"
-                data-testid="tab-admin-spreadsheet"
-                onClick={() => setAdminTab('spreadsheet')}
-                className={`flex-1 min-w-[140px] min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap ${
-                  adminTab === 'spreadsheet'
-                    ? 'bg-[#07361D] text-[#F5D000] shadow-xs'
-                    : 'text-slate-700 hover:bg-stone-100'
-                }`}
-              >
-                <span>🗂️ Data Spreadsheet</span>
-              </button>
-
-              {userRole === 'ADMIN_PUSAT' && (
-                <button
-                  type="button"
-                  data-testid="btn-admin-tab-kode"
-                  onClick={() => setAdminTab('kode')}
-                  className={`flex-1 min-w-[160px] min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap ${
-                    adminTab === 'kode'
-                      ? 'bg-[#07361D] text-[#F5D000] shadow-xs'
-                      : 'text-slate-700 hover:bg-stone-100'
-                  }`}
-                >
-                  <span>⚙️ Koneksi Sheet &amp; Code.gs</span>
-                </button>
-              )}
-            </nav>
-
             {/* ISI HALAMAN SESUAI MENU TAB YANG DIPILIH */}
-            {adminTab === 'overview' && (
-              <div className="max-w-3xl mx-auto">
-                <ReportOverview
-                  laporanList={laporanList}
-                  activeFilter={statusFilter}
-                  onSelectFilter={setStatusFilter}
-                  dateRange={dateRange}
-                  onDateRangeChange={setDateRange}
-                  lastSyncTime={lastSyncTime}
-                  onQuickSync={() => executeSyncUKP(true)}
-                  mode="OVERVIEW_ONLY"
-                  onDeleteLaporan={handleDeleteLaporan}
-                />
+            {adminTab === 'hub' && (
+              <div className="max-w-4xl mx-auto space-y-6">
+                <div className="bg-[#075e54] text-white rounded-2xl p-4 sm:p-5 shadow-sm flex items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-semibold text-emerald-200 uppercase tracking-wider">Portal Pengasuhan Al-Andalus</span>
+                    <h1 className="text-base sm:text-lg font-bold text-white">
+                      Pilih Menu Layanan Utama
+                    </h1>
+                    <p className="text-xs text-emerald-100/90">
+                      Kelola laporan sakit, izin pulang, atau rekap sholat santri di bawah ini.
+                    </p>
+                  </div>
+                  <div className="w-12 h-12 rounded-xl bg-white flex items-center justify-center shrink-0 border border-white/20 shadow-inner p-1 overflow-hidden">
+                    <img src={LOGO_URL} alt="Logo Al-Andalus" className="w-full h-full object-contain" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <button
+                    type="button"
+                    onClick={() => setAdminTab('sakit')}
+                    className="group bg-gradient-to-br from-emerald-900 to-emerald-950 text-white rounded-3xl p-6 shadow-md border border-emerald-700/60 text-left hover:scale-[1.02] transition cursor-pointer flex flex-col justify-between min-h-[220px]"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="w-12 h-12 rounded-2xl bg-emerald-800/80 flex items-center justify-center text-2xl shadow-inner border border-emerald-700/50">
+                        🏥
+                      </div>
+                      <span className="text-[11px] font-mono bg-emerald-700/80 text-emerald-200 px-2.5 py-1 rounded-xl">
+                        {laporanList.length} Laporan
+                      </span>
+                    </div>
+                    <div className="space-y-1.5 mt-4">
+                      <h3 className="text-base font-bold text-white group-hover:text-emerald-200 transition">
+                        Laporan Santri Sakit &amp; UKP
+                      </h3>
+                      <p className="text-xs text-emerald-200/90 leading-relaxed">
+                        Input keluhan, pantauan penanganan UKP, rekap cepat WhatsApp grup, &amp; unduh CSV harian.
+                      </p>
+                    </div>
+                    <div className="pt-4 mt-3 border-t border-emerald-800/60 flex items-center justify-between text-xs font-semibold text-emerald-200">
+                      <span>Buka Menu Sakit</span>
+                      <span className="group-hover:translate-x-1 transition">→</span>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAdminTab('perizinan')}
+                    className="group bg-gradient-to-br from-stone-900 to-slate-950 text-white rounded-3xl p-6 shadow-md border border-slate-800 text-left hover:scale-[1.02] transition cursor-pointer flex flex-col justify-between min-h-[220px]"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center text-2xl shadow-inner border border-slate-700">
+                        🏠
+                      </div>
+                      <span className="text-[11px] font-mono bg-slate-800 text-slate-300 px-2.5 py-1 rounded-xl">
+                        {perizinanList.length} Surat Izin
+                      </span>
+                    </div>
+                    <div className="space-y-1.5 mt-4">
+                      <h3 className="text-base font-bold text-white group-hover:text-slate-200 transition">
+                        Izin Pulang Santri
+                      </h3>
+                      <p className="text-xs text-slate-300/90 leading-relaxed">
+                        Penerbitan surat izin resmi ber-tanda tangan &amp; QR, perpanjangan masa izin, &amp; pemantauan kepulangan.
+                      </p>
+                    </div>
+                    <div className="pt-4 mt-3 border-t border-slate-800 flex items-center justify-between text-xs font-semibold text-slate-300">
+                      <span>Buka Menu Perizinan</span>
+                      <span className="group-hover:translate-x-1 transition">→</span>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAdminTab('sholat')}
+                    className="group bg-gradient-to-br from-teal-900 to-teal-950 text-white rounded-3xl p-6 shadow-md border border-teal-700/60 text-left hover:scale-[1.02] transition cursor-pointer flex flex-col justify-between min-h-[220px]"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="w-12 h-12 rounded-2xl bg-teal-800/80 flex items-center justify-center text-2xl shadow-inner border border-teal-700/50">
+                        🕌
+                      </div>
+                      <span className="text-[11px] font-mono bg-teal-700/80 text-teal-200 px-2.5 py-1 rounded-xl">
+                        {sholatList.length} Rekap
+                      </span>
+                    </div>
+                    <div className="space-y-1.5 mt-4">
+                      <h3 className="text-base font-bold text-white group-hover:text-teal-200 transition">
+                        Rekap Keterlambatan Sholat
+                      </h3>
+                      <p className="text-xs text-teal-200/90 leading-relaxed">
+                        Pencatatan 1-tap sholat 5 waktu (Subuh, Dzuhur, Ashar, Maghrib, Isya) &amp; leaderboard keterlambatan santri.
+                      </p>
+                    </div>
+                    <div className="pt-4 mt-3 border-t border-teal-800/60 flex items-center justify-between text-xs font-semibold text-teal-200">
+                      <span>Buka Menu Sholat</span>
+                      <span className="group-hover:translate-x-1 transition">→</span>
+                    </div>
+                  </button>
+                </div>
+
+                {userRole === 'ADMIN_PUSAT' && (
+                  <div className="bg-white rounded-3xl p-5 border border-slate-200/90 shadow-sm flex flex-wrap items-center justify-between gap-4">
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-800">Manajemen Database &amp; Sinkronisasi Google Sheets</h4>
+                      <p className="text-[11px] text-slate-500 mt-0.5">Kelola data spreadsheet, Master Data santri, dan URL koneksi Apps Script (*.gs).</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setAdminTab('spreadsheet')}
+                        className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold transition cursor-pointer"
+                      >
+                        🗂️ Buka Spreadsheet
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAdminTab('kode')}
+                        className="px-4 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold transition cursor-pointer"
+                      >
+                        ⚙️ Koneksi Sheet
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
-            {adminTab === 'wa' && (
-              <div className="max-w-3xl mx-auto">
-                <ReportOverview
-                  laporanList={laporanList}
-                  activeFilter={statusFilter}
-                  onSelectFilter={setStatusFilter}
-                  dateRange={dateRange}
-                  onDateRangeChange={setDateRange}
-                  lastSyncTime={lastSyncTime}
-                  onQuickSync={() => executeSyncUKP(true)}
-                  mode="WA_ONLY"
-                  onDeleteLaporan={handleDeleteLaporan}
-                />
-              </div>
-            )}
+            {adminTab === 'sakit' && (
+              <div className="max-w-3xl mx-auto space-y-4">
+                <div className="flex items-center justify-between bg-white px-4 py-3 rounded-2xl border border-slate-200 shadow-xs">
+                  <button
+                    type="button"
+                    onClick={() => setAdminTab('hub')}
+                    className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <span>← Kembali ke Menu Utama</span>
+                  </button>
+                  <span className="text-xs font-bold text-emerald-800">🏥 Menu Utama: Laporan Santri Sakit &amp; UKP</span>
+                </div>
 
-            {adminTab === 'input' && (
-              <div className="max-w-2xl mx-auto">
                 <MusyrifFormCard
                   masterData={masterData}
                   laporanList={laporanList}
@@ -701,11 +905,35 @@ export default function App() {
                   activeMusyrif={activeMusyrif}
                   hideFullOverview={true}
                 />
+
+                <ReportOverview
+                  laporanList={laporanList}
+                  perizinanList={perizinanList}
+                  sholatList={sholatList}
+                  activeFilter={statusFilter}
+                  onSelectFilter={setStatusFilter}
+                  dateRange={dateRange}
+                  onDateRangeChange={setDateRange}
+                  lastSyncTime={lastSyncTime}
+                  onQuickSync={() => executeSyncUKP(true)}
+                  mode="FULL"
+                  onDeleteLaporan={handleDeleteLaporan}
+                />
               </div>
             )}
 
             {adminTab === 'perizinan' && (
-              <div className="max-w-4xl mx-auto">
+              <div className="max-w-4xl mx-auto space-y-4">
+                <div className="flex items-center justify-between bg-white px-4 py-3 rounded-2xl border border-slate-200 shadow-xs">
+                  <button
+                    type="button"
+                    onClick={() => setAdminTab('hub')}
+                    className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <span>← Kembali ke Menu Utama</span>
+                  </button>
+                  <span className="text-xs font-bold text-slate-800">🏠 Menu Utama: Izin Pulang Santri</span>
+                </div>
                 <PerizinanPulangPanel
                   masterData={masterData}
                   perizinanList={perizinanList}
@@ -718,51 +946,95 @@ export default function App() {
               </div>
             )}
 
+            {adminTab === 'sholat' && (
+              <div className="max-w-4xl mx-auto space-y-4">
+                <div className="flex items-center justify-between bg-white px-4 py-3 rounded-2xl border border-slate-200 shadow-xs">
+                  <button
+                    type="button"
+                    onClick={() => setAdminTab('hub')}
+                    className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <span>← Kembali ke Menu Utama</span>
+                  </button>
+                  <span className="text-xs font-bold text-teal-800">🕌 Menu Utama: Rekap Keterlambatan Sholat</span>
+                </div>
+                <RekapSholatPanel
+                  masterData={masterData}
+                  sholatList={sholatList}
+                  onAddSholat={handleAddSholat}
+                  onDeleteSholat={handleDeleteSholat}
+                  onResetSholatRange={handleResetSholatRange}
+                  usersRoleList={usersRoleList}
+                  dateRange={dateRange}
+                  onDateRangeChange={setDateRange}
+                  activeMusyrifName={activeMusyrif?.namaMusyrif || (userRole === 'ADMIN_PENGASUHAN' ? 'Admin Pengasuhan' : 'Admin Pusat')}
+                />
+              </div>
+            )}
+
             {adminTab === 'spreadsheet' && (
-              <SpreadsheetSyncPanel
-                masterData={masterData}
-                laporanList={laporanList}
-                ukpList={ukpList}
-                usersRoleList={usersRoleList}
-                syncLogs={syncLogs}
-                lastSyncTime={lastSyncTime}
-                statusFilter={statusFilter}
-                onStatusFilterChange={setStatusFilter}
-                dateRange={dateRange}
-                autoTriggerEnabled={autoTriggerEnabled}
-                onToggleAutoTrigger={() =>
-                  setAutoTriggerEnabled((prev) => !prev)
-                }
-                onRunSyncNow={() => executeSyncUKP(true)}
-                onUpdateUKPTindakan={handleUpdateUKPTindakan}
-                onAddUKPRow={handleAddUKPRow}
-                onAddMasterSantri={handleAddMasterSantri}
-                onUpdateUserPassword={handleUpdateUserPassword}
-                onAddUserRole={handleAddUserRole}
-                hideUsersRoleTab={userRole === 'ADMIN_PENGASUHAN'}
-                onDeleteLaporan={handleDeleteLaporan}
-                perizinanList={perizinanList}
-              />
+              <div className="max-w-5xl mx-auto space-y-4">
+                <div className="flex items-center justify-between bg-white px-4 py-3 rounded-2xl border border-slate-200 shadow-xs">
+                  <button
+                    type="button"
+                    onClick={() => setAdminTab('hub')}
+                    className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <span>← Kembali ke Menu Utama</span>
+                  </button>
+                  <span className="text-xs font-bold text-slate-800">🗂️ Data Spreadsheet &amp; Database</span>
+                </div>
+                <SpreadsheetSyncPanel
+                  masterData={masterData}
+                  laporanList={laporanList}
+                  ukpList={ukpList}
+                  usersRoleList={usersRoleList}
+                  syncLogs={syncLogs}
+                  lastSyncTime={lastSyncTime}
+                  statusFilter={statusFilter}
+                  onStatusFilterChange={setStatusFilter}
+                  dateRange={dateRange}
+                  autoTriggerEnabled={autoTriggerEnabled}
+                  onToggleAutoTrigger={() =>
+                    setAutoTriggerEnabled((prev) => !prev)
+                  }
+                  onRunSyncNow={() => executeSyncUKP(true)}
+                  onUpdateUKPTindakan={handleUpdateUKPTindakan}
+                  onAddUKPRow={handleAddUKPRow}
+                  onAddMasterSantri={handleAddMasterSantri}
+                  onUpdateUserPassword={handleUpdateUserPassword}
+                  onAddUserRole={handleAddUserRole}
+                  hideUsersRoleTab={userRole === 'ADMIN_PENGASUHAN'}
+                  onDeleteLaporan={handleDeleteLaporan}
+                  perizinanList={perizinanList}
+                  sholatList={sholatList}
+                />
+              </div>
             )}
 
             {adminTab === 'kode' && userRole === 'ADMIN_PUSAT' && (
-              <SourceCodePanel
-                gasWebAppUrl={gasWebAppUrl}
-                isSyncingGas={isSyncingGas}
-                onSaveAndTestGasUrl={handleSaveAndTestGasUrl}
-                onPullFromGasNow={() => pullFromGasSheets(gasWebAppUrl, true)}
-              />
+              <div className="max-w-4xl mx-auto space-y-4">
+                <div className="flex items-center justify-between bg-white px-4 py-3 rounded-2xl border border-slate-200 shadow-xs">
+                  <button
+                    type="button"
+                    onClick={() => setAdminTab('hub')}
+                    className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <span>← Kembali ke Menu Utama</span>
+                  </button>
+                  <span className="text-xs font-bold text-emerald-800">⚙️ Pengaturan Koneksi Google Sheets &amp; Code.gs</span>
+                </div>
+                <SourceCodePanel
+                  gasWebAppUrl={gasWebAppUrl}
+                  isSyncingGas={isSyncingGas}
+                  onSaveAndTestGasUrl={handleSaveAndTestGasUrl}
+                  onPullFromGasNow={() => pullFromGasSheets(gasWebAppUrl, true)}
+                />
+              </div>
             )}
           </div>
         )}
       </main>
-
-      {/* Custom Footer Sesuai Spesifikasi User */}
-      <footer className="w-full bg-[#07361D] border-t-2 border-[#D4AF37]/50 py-5 px-4 text-center mt-10 print:hidden">
-        <p className="text-xs font-medium text-[#F5D000]/90">
-          Bidang Pengasuhan Pesantren Al-Andalus
-        </p>
-      </footer>
     </div>
   );
 }

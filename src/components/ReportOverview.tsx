@@ -36,11 +36,19 @@ import {
   findDuplicateLaporanKeys,
   cleanDisplayName,
 } from '../utils/ukpSyncEngine';
+import { type PerizinanRow } from '../utils/perizinanEngine';
+import {
+  type SholatRow,
+  filterSholatByDateRange,
+  isSholatRowPutih,
+} from '../utils/sholatEngine';
 
 export type ReportStatusFilter = 'ALL' | 'WAITING' | 'DONE';
 
 interface ReportOverviewProps {
   laporanList: LaporanMusyrifRow[];
+  perizinanList?: PerizinanRow[];
+  sholatList?: SholatRow[];
   activeFilter: ReportStatusFilter;
   onSelectFilter: (filter: ReportStatusFilter) => void;
   dateRange: DateRangeFilter;
@@ -53,6 +61,8 @@ interface ReportOverviewProps {
 
 export const ReportOverview: React.FC<ReportOverviewProps> = ({
   laporanList,
+  perizinanList = [],
+  sholatList = [],
   activeFilter,
   onSelectFilter,
   dateRange,
@@ -91,6 +101,50 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
     }
     return names;
   }, [dateFilteredList]);
+
+  const filteredPerizinanList = useMemo(() => {
+    const { startDate, endDate } = dateRange;
+    if (!startDate.trim() && !endDate.trim()) return perizinanList;
+    return perizinanList.filter((p) => {
+      const tgl = p.dariTanggal || '';
+      if (!tgl) return false;
+      if (startDate && tgl < startDate) return false;
+      if (endDate && tgl > endDate) return false;
+      return true;
+    });
+  }, [perizinanList, dateRange]);
+
+  const filteredSholatList = useMemo(() => {
+    return filterSholatByDateRange(sholatList, dateRange);
+  }, [sholatList, dateRange]);
+
+  const sholatStats = useMemo(() => {
+    let totalLate = 0;
+    let subuhLate = 0;
+    let dzuhurLate = 0;
+    let asharLate = 0;
+    let maghribLate = 0;
+    let isyaLate = 0;
+
+    filteredSholatList.forEach((row) => {
+      if (isSholatRowPutih(row)) return;
+      if (row.subuh === 'TELAT') { totalLate++; subuhLate++; }
+      if (row.dzuhur === 'TELAT') { totalLate++; dzuhurLate++; }
+      if (row.ashar === 'TELAT') { totalLate++; asharLate++; }
+      if (row.maghrib === 'TELAT') { totalLate++; maghribLate++; }
+      if (row.isya === 'TELAT') { totalLate++; isyaLate++; }
+    });
+
+    return {
+      totalRecords: filteredSholatList.length,
+      totalLate,
+      subuhLate,
+      dzuhurLate,
+      asharLate,
+      maghribLate,
+      isyaLate,
+    };
+  }, [filteredSholatList]);
 
   const stats = calculateReportOverview(filteredByNameAndDateList);
   const pieData = buildReportStatusPieData(filteredByNameAndDateList);
@@ -379,45 +433,125 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
       data-testid="report-overview"
       className="bg-white rounded-3xl p-5 sm:p-6 shadow-sm border border-slate-200/90 mb-5"
     >
-      {/* Header Bar Report Overview */}
-      <div className="flex items-center justify-between gap-2 pb-3.5 mb-3.5 border-b border-slate-100">
+      {/* Header Bar Report Overview (Streamlined & Compact) */}
+      <div className="flex items-center justify-between gap-2 pb-3 mb-3 border-b border-slate-100">
         <div>
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-800">
-            <ClipboardList className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-            <span>Report Overview</span>
-            <span aria-hidden="true">·</span>
-            <span className="font-normal text-slate-500">
-              Status Penanganan UKP
-            </span>
+          <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-800">
+            <ClipboardList className="w-4 h-4 text-emerald-700 shrink-0" />
+            <span>Laporan Santri Sakit &amp; Izin Pulang</span>
           </div>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Pantauan langsung laporan santri sakit di{' '}
-            <span className="font-mono">Laporan_Musyrif</span>
-          </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
             onClick={handleDownloadDailyCsv}
             data-testid="btn-download-csv-daily"
-            className="min-h-[36px] px-3 py-1.5 rounded-xl bg-[#07361D] hover:bg-[#0B4627] text-[#F5D000] text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+            className="min-h-[32px] px-2.5 py-1 rounded-lg bg-[#07361D] hover:bg-[#0B4627] text-[#F5D000] text-[11px] font-semibold transition flex items-center gap-1 cursor-pointer whitespace-nowrap"
           >
-            <Download className="w-3.5 h-3.5 shrink-0" />
-            <span>Unduh CSV Harian</span>
+            <Download className="w-3 h-3 shrink-0" />
+            <span>CSV</span>
           </button>
 
           {onQuickSync && (
             <button
               type="button"
               onClick={onQuickSync}
-              aria-label="Segarkan status laporan dari Data UKP"
-              className="min-h-[36px] px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold transition flex items-center gap-1.5 shrink-0 cursor-pointer whitespace-nowrap"
+              aria-label="Refresh Status"
+              className="min-h-[32px] px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[11px] font-semibold transition flex items-center gap-1 shrink-0 cursor-pointer whitespace-nowrap"
             >
-              <RefreshCw className="w-3.5 h-3.5 shrink-0" />
-              <span>Refresh Status</span>
+              <RefreshCw className="w-3 h-3 shrink-0" />
+              <span>Refresh</span>
             </button>
           )}
+        </div>
+      </div>
+
+      {/* RINGKASAN RINGKAS (Laporan Sakit, Izin Pulang, Keterlambatan Sholat - Difilter Rentang Tanggal) */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+        {/* Card 1: Laporan Sakit */}
+        <div className="bg-gradient-to-br from-emerald-900 to-emerald-950 text-white rounded-2xl p-4 shadow-sm border border-emerald-700/50 flex flex-col justify-between">
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-emerald-800/60">
+            <div className="flex items-center gap-2">
+              <span className="text-base">🏥</span>
+              <span className="text-xs font-bold text-emerald-100">Laporan Sakit Santri</span>
+            </div>
+            <span className="text-xs font-mono font-bold bg-emerald-800/80 text-emerald-200 px-2.5 py-0.5 rounded-lg">
+              {stats.total} Total
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-center pt-1">
+            <div className="bg-emerald-800/40 rounded-xl p-2 border border-emerald-700/30">
+              <p className="text-[10px] text-emerald-200 font-medium">Menunggu UKP</p>
+              <p className="text-lg font-mono font-bold text-amber-300 mt-0.5">{stats.pending}</p>
+            </div>
+            <div className="bg-emerald-800/40 rounded-xl p-2 border border-emerald-700/30">
+              <p className="text-[10px] text-emerald-200 font-medium">Tertangani / Selesai</p>
+              <p className="text-lg font-mono font-bold text-emerald-300 mt-0.5">{stats.resolved}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Card 2: Izin Pulang */}
+        <div className="bg-gradient-to-br from-stone-900 to-slate-950 text-white rounded-2xl p-4 shadow-sm border border-slate-800 flex flex-col justify-between">
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
+            <div className="flex items-center gap-2">
+              <span className="text-base">🏠</span>
+              <span className="text-xs font-bold text-slate-100">Perizinan Pulang Santri</span>
+            </div>
+            <span className="text-xs font-mono font-bold bg-slate-800 text-slate-300 px-2.5 py-0.5 rounded-lg">
+              {filteredPerizinanList.length} Total
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-center pt-1">
+            <div className="bg-slate-800/50 rounded-xl p-2 border border-slate-700/50">
+              <p className="text-[10px] text-slate-300 font-medium">Sedang Izin / Aktif</p>
+              <p className="text-lg font-mono font-bold text-amber-400 mt-0.5">
+                {filteredPerizinanList.filter((p: PerizinanRow) => !p.tibaTanggal || p.tibaTanggal.trim() === '').length}
+              </p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl p-2 border border-slate-700/50">
+              <p className="text-[10px] text-slate-300 font-medium">Sudah Tiba Kembali</p>
+              <p className="text-lg font-mono font-bold text-emerald-400 mt-0.5">
+                {filteredPerizinanList.filter((p: PerizinanRow) => Boolean(p.tibaTanggal && p.tibaTanggal.trim() !== '')).length}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Card 3: Keterlambatan Sholat */}
+        <div className="bg-gradient-to-br from-teal-900 to-teal-950 text-white rounded-2xl p-4 shadow-sm border border-teal-700/50 flex flex-col justify-between">
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-teal-800/60">
+            <div className="flex items-center gap-2">
+              <span className="text-base">🕌</span>
+              <span className="text-xs font-bold text-teal-100">Keterlambatan Sholat</span>
+            </div>
+            <span className="text-xs font-mono font-bold bg-teal-800/80 text-teal-200 px-2.5 py-0.5 rounded-lg">
+              {sholatStats.totalLate} Telat
+            </span>
+          </div>
+          <div className="grid grid-cols-5 gap-1 text-center pt-1">
+            <div className="bg-teal-800/40 rounded-lg p-1.5 border border-teal-700/30">
+              <p className="text-[9px] text-teal-200">Subuh</p>
+              <p className="text-xs font-mono font-bold text-amber-300 mt-0.5">{sholatStats.subuhLate}</p>
+            </div>
+            <div className="bg-teal-800/40 rounded-lg p-1.5 border border-teal-700/30">
+              <p className="text-[9px] text-teal-200">Dzuhur</p>
+              <p className="text-xs font-mono font-bold text-amber-300 mt-0.5">{sholatStats.dzuhurLate}</p>
+            </div>
+            <div className="bg-teal-800/40 rounded-lg p-1.5 border border-teal-700/30">
+              <p className="text-[9px] text-teal-200">Ashar</p>
+              <p className="text-xs font-mono font-bold text-amber-300 mt-0.5">{sholatStats.asharLate}</p>
+            </div>
+            <div className="bg-teal-800/40 rounded-lg p-1.5 border border-teal-700/30">
+              <p className="text-[9px] text-teal-200">Maghrib</p>
+              <p className="text-xs font-mono font-bold text-amber-300 mt-0.5">{sholatStats.maghribLate}</p>
+            </div>
+            <div className="bg-teal-800/40 rounded-lg p-1.5 border border-teal-700/30">
+              <p className="text-[9px] text-teal-200">Isya</p>
+              <p className="text-xs font-mono font-bold text-amber-300 mt-0.5">{sholatStats.isyaLate}</p>
+            </div>
+          </div>
         </div>
       </div>
 

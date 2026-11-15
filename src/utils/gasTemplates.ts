@@ -515,6 +515,7 @@ const SHEET_LAPORAN = 'Laporan_Musyrif';
 const SHEET_UKP = 'Data_UKP';
 const SHEET_USERS = 'users_role';
 const SHEET_PERIZINAN = 'Perizinan';
+const SHEET_SHOLAT = 'Rekap_Sholat';
 const TIMEZONE = 'Asia/Jakarta';
 
 /**
@@ -676,7 +677,19 @@ function setupSheetsOtomatis() {
     ]]);
   }
 
-  Logger.log('Ke-5 Sheet (Master_Data, Laporan_Musyrif, Data_UKP, users_role, Perizinan) siap digunakan!');
+  // 6. Sheet Rekap_Sholat (15 Kolom A-O termasuk Keterangan Pemutihan)
+  let sSholat = findSheetSmart_(ss, [SHEET_SHOLAT, 'rekap-sholat', 'Rekap Sholat', 'sholat', 'keterlambatan_sholat']);
+  if (!sSholat) {
+    sSholat = ss.insertSheet(SHEET_SHOLAT);
+    sSholat.getRange(1, 1, 1, 15).setValues([[
+      'ID_Sholat', 'Tanggal', 'NIS', 'Nama_Santri', 'Kelas', 'Gedung', 'Kamar',
+      'Subuh', 'Dzuhur', 'Ashar', 'Maghrib', 'Isya', 'Pencatat', 'Timestamp', 'Keterangan'
+    ]]);
+  } else if (sSholat.getLastColumn() < 15) {
+    sSholat.getRange(1, 15).setValue('Keterangan');
+  }
+
+  Logger.log('Ke-6 Sheet siap digunakan!');
 }
 
 /**
@@ -776,7 +789,22 @@ function handleApiAction_(action, payload, e) {
       }, e);
     }
 
-    // Default fallback: kembalikan seluruh data 5 sheet
+    if (action === 'simpanSholat') {
+      const result = simpanRekapSholat(payload);
+      return sendJsonResponse_(result, e);
+    }
+
+    if (action === 'deleteSholat') {
+      const result = hapusRekapSholat(payload);
+      return sendJsonResponse_(result, e);
+    }
+
+    if (action === 'resetSholatRange') {
+      const result = resetRekapSholatRange(payload);
+      return sendJsonResponse_(result, e);
+    }
+
+    // Default fallback: kembalikan seluruh data sheet
     return sendJsonResponse_({
       status: 'success',
       masterData: getMasterSantri(),
@@ -784,6 +812,7 @@ function handleApiAction_(action, payload, e) {
       ukpList: getDataUKP(),
       usersRoleList: getUsersRole(),
       perizinanList: getPerizinan(),
+      sholatList: getRekapSholat(),
       lastSyncTime: Utilities.formatDate(new Date(), TIMEZONE, 'dd/MM/yyyy HH:mm:ss')
     }, e);
   } catch (err) {
@@ -1591,6 +1620,154 @@ function hapusPerizinan(payload) {
       }
     }
     return false;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getRekapSholat() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = findSheetSmart_(ss, [SHEET_SHOLAT, 'rekap-sholat', 'Rekap Sholat', 'sholat', 'keterlambatan_sholat']);
+    if (!sheet || sheet.getLastRow() < 2) return [];
+    const maxCol = Math.max(15, sheet.getLastColumn());
+    const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, maxCol).getDisplayValues();
+    const list = [];
+    for (let i = 0; i < values.length; i++) {
+      const r = values[i];
+      const nama = String(r[3] || '').trim();
+      if (!nama) continue;
+      list.push({
+        idSholat: String(r[0] || ('SHOLAT-' + (i + 1))).trim(),
+        tanggal: normalizeDateStr_(r[1]),
+        nis: String(r[2] || '').trim(),
+        namaSantri: nama,
+        kelas: String(r[4] || '').trim(),
+        gedung: String(r[5] || '').trim(),
+        kamar: String(r[6] || '').trim(),
+        subuh: String(r[7] || 'TEPAT').trim(),
+        dzuhur: String(r[8] || 'TEPAT').trim(),
+        ashar: String(r[9] || 'TEPAT').trim(),
+        maghrib: String(r[10] || 'TEPAT').trim(),
+        isya: String(r[11] || 'TEPAT').trim(),
+        pencatat: String(r[12] || '').trim(),
+        timestamp: String(r[13] || new Date().toISOString()).trim(),
+        keterangan: String(r[14] || 'AKTIF').trim()
+      });
+    }
+    return list.reverse();
+  } catch (err) {
+    return [];
+  }
+}
+
+function simpanRekapSholat(payload) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = findSheetSmart_(ss, [SHEET_SHOLAT, 'rekap-sholat', 'Rekap Sholat', 'sholat', 'keterlambatan_sholat']);
+    if (!sheet) {
+      sheet = ss.insertSheet(SHEET_SHOLAT);
+      sheet.getRange(1, 1, 1, 15).setValues([[
+        'ID_Sholat', 'Tanggal', 'NIS', 'Nama_Santri', 'Kelas', 'Gedung', 'Kamar',
+        'Subuh', 'Dzuhur', 'Ashar', 'Maghrib', 'Isya', 'Pencatat', 'Timestamp', 'Keterangan'
+      ]]);
+    } else if (sheet.getLastColumn() < 15) {
+      sheet.getRange(1, 15).setValue('Keterangan');
+    }
+    const idSholat = payload.idSholat || ('SHOLAT-' + Date.now());
+    const tanggal = payload.tanggal || Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
+    const nis = payload.nis || '-';
+    const namaSantri = payload.namaSantri || '';
+    const kelas = payload.kelas || '-';
+    const gedung = payload.gedung || '-';
+    const kamar = payload.kamar || '-';
+    const subuh = payload.subuh || 'TEPAT';
+    const dzuhur = payload.dzuhur || 'TEPAT';
+    const ashar = payload.ashar || 'TEPAT';
+    const maghrib = payload.maghrib || 'TEPAT';
+    const isya = payload.isya || 'TEPAT';
+    const pencatat = payload.pencatat || 'Admin';
+    const timestamp = payload.timestamp || new Date().toISOString();
+    const keterangan = payload.keterangan || 'AKTIF';
+
+    sheet.appendRow([
+      idSholat, tanggal, nis, namaSantri, kelas, gedung, kamar,
+      subuh, dzuhur, ashar, maghrib, isya, pencatat, timestamp, keterangan
+    ]);
+
+    return {
+      status: 'success',
+      idSholat: idSholat,
+      sholatList: getRekapSholat()
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function hapusRekapSholat(payload) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = findSheetSmart_(ss, [SHEET_SHOLAT, 'rekap-sholat', 'Rekap Sholat', 'sholat', 'keterlambatan_sholat']);
+    if (!sheet || sheet.getLastRow() < 2) return { status: 'success', deleted: false };
+
+    const targetId = String(payload.idSholat || '').trim();
+    const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getDisplayValues();
+    for (let i = 0; i < values.length; i++) {
+      if (String(values[i][0]).trim() === targetId) {
+        sheet.deleteRow(i + 2);
+        return { status: 'success', deleted: true, sholatList: getRekapSholat() };
+      }
+    }
+    return { status: 'success', deleted: false, sholatList: getRekapSholat() };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function resetRekapSholatRange(payload) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = findSheetSmart_(ss, [SHEET_SHOLAT, 'rekap-sholat', 'Rekap Sholat', 'sholat', 'keterlambatan_sholat']);
+    if (!sheet || sheet.getLastRow() < 2) return { status: 'success', updatedCount: 0 };
+
+    if (sheet.getLastColumn() < 15) {
+      sheet.getRange(1, 15).setValue('Keterangan');
+    }
+
+    const startDate = String(payload.startDate || '').trim();
+    const endDate = String(payload.endDate || '').trim();
+    const ketBaru = String(
+      payload.keterangan ||
+        ('DIPUTIHKAN (' + Utilities.formatDate(new Date(), TIMEZONE, 'dd/MM/yyyy HH:mm') + ')')
+    ).trim();
+
+    const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 15).getValues();
+    let updatedCount = 0;
+    for (let i = 0; i < data.length; i++) {
+      const row = data[i];
+      const tgl = normalizeDateStr_(row[1]);
+      let match = true;
+      if (startDate && tgl < startDate) match = false;
+      if (endDate && tgl > endDate) match = false;
+
+      if (match || (!startDate && !endDate)) {
+        sheet.getRange(i + 2, 15).setValue(ketBaru);
+        updatedCount++;
+      }
+    }
+
+    return {
+      status: 'success',
+      updatedCount: updatedCount,
+      sholatList: getRekapSholat()
+    };
   } finally {
     lock.releaseLock();
   }
