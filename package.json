@@ -13,6 +13,8 @@
   "dependencies": {
     "@tailwindcss/vite": ">=4.0.0",
     "@vitejs/plugin-react": ">=4.3.0",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.9",
     "lucide-react": ">=0.460.0",
     "motion": ">=11.0.0",
     "react": ">=19.0.0",
@@ -20,7 +22,8 @@
     "react-is": ">=19.0.0",
     "recharts": ">=2.15.0",
     "sweetalert2": ">=11.14.0",
-    "vite": ">=6.0.0"
+    "vite": ">=6.0.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": ">=20.0.0",
@@ -33,4 +36,3 @@
     "typescript": ">=5.7.0"
   }
 }
-

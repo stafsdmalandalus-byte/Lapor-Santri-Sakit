@@ -3,6 +3,7 @@ import {
   cleanDisplayName,
   normalizePersonName,
   normalizeDateYYYYMMDD,
+  normalizeDateRangeBounds,
   formatTanggalIndo,
   getTodayDateISO,
   escapeCsvCell,
@@ -161,7 +162,7 @@ export function normalizePerizinanDate(raw: string): string {
   }
 
   // Cek apakah M/D/YYYY atau D/M/YYYY
-  const slashMatch = clean.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  const slashMatch = clean.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[T\s].*)?$/);
   if (slashMatch) {
     const first = parseInt(slashMatch[1], 10);
     const second = parseInt(slashMatch[2], 10);
@@ -169,6 +170,10 @@ export function normalizePerizinanDate(raw: string): string {
     // Pada sheet Perizinan_2026-2027, "11/8/2026" dengan Bulan="November" adalah M/D/YYYY (bulan 11, tanggal 8)
     if (first >= 1 && first <= 12 && second >= 1 && second <= 31) {
       return `${year}-${String(first).padStart(2, '0')}-${String(second).padStart(2, '0')}`;
+    }
+    // Jika angka pertama > 12 (mis. "16/11/2026"), maka pasti DD/MM/YYYY
+    if (first > 12 && first <= 31 && second >= 1 && second <= 12) {
+      return `${year}-${String(second).padStart(2, '0')}-${String(first).padStart(2, '0')}`;
     }
   }
 
@@ -1406,8 +1411,10 @@ export function filterPerizinanByDateAndName(
   range: DateRangeFilter,
   nameQuery: string
 ): PerizinanRow[] {
-  const start = normalizePerizinanDate(range.startDate);
-  const end = normalizePerizinanDate(range.endDate);
+  const { start, end } = normalizeDateRangeBounds({
+    startDate: normalizePerizinanDate(range.startDate),
+    endDate: normalizePerizinanDate(range.endDate),
+  });
   const q = normalizePersonName(nameQuery);
 
   return rows.filter((row) => {

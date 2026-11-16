@@ -70,6 +70,8 @@ interface PerizinanPulangPanelProps {
   ) => PerizinanRow;
   onDeletePerizinan: (row: PerizinanRow) => void;
   onSyncNow?: () => void;
+  onSilentSync?: () => void;
+  onPullByDateRange?: (range: DateRangeFilter) => Promise<void>;
   isSyncing?: boolean;
   lastSyncTime?: string | null;
 }
@@ -86,6 +88,8 @@ export const PerizinanPulangPanel: React.FC<PerizinanPulangPanelProps> = ({
   onExtendPerizinan,
   onDeletePerizinan,
   onSyncNow,
+  onSilentSync,
+  onPullByDateRange,
   isSyncing = false,
   lastSyncTime,
 }) => {
@@ -735,24 +739,38 @@ export const PerizinanPulangPanel: React.FC<PerizinanPulangPanelProps> = ({
 
           {/* Filter Tanggal & Pencarian Nama Santri */}
           <div className="rounded-2xl bg-stone-50/90 border border-slate-200/80 p-3.5 space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
                 <CalendarRange className="w-3.5 h-3.5 text-emerald-700" />
                 <span>Filter Tanggal Izin &amp; Pencarian Nama Santri</span>
               </div>
-              {(dateRange.startDate || dateRange.endDate || searchName) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDateRange({ startDate: '', endDate: '' });
-                    setSearchName('');
-                  }}
-                  className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 flex items-center gap-1 cursor-pointer"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  <span>Reset Filter</span>
-                </button>
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                {onPullByDateRange && (
+                  <button
+                    type="button"
+                    onClick={() => onPullByDateRange(dateRange)}
+                    disabled={isSyncing}
+                    className="px-2.5 py-1 rounded-lg bg-[#075e54] hover:bg-[#054c42] text-white text-[11px] font-semibold transition flex items-center gap-1 cursor-pointer whitespace-nowrap disabled:opacity-60"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
+                    <span>{isSyncing ? 'Menarik Data...' : 'Tarik Data Rentang Ini'}</span>
+                  </button>
+                )}
+                {(dateRange.startDate || dateRange.endDate || searchName) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDateRange({ startDate: '', endDate: '' });
+                      setSearchName('');
+                      onSilentSync?.();
+                    }}
+                    className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 flex items-center gap-1 cursor-pointer"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>Reset Filter</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-1.5">
@@ -764,12 +782,13 @@ export const PerizinanPulangPanel: React.FC<PerizinanPulangPanelProps> = ({
                   <button
                     key={preset.label}
                     type="button"
-                    onClick={() =>
+                    onClick={() => {
                       setDateRange({
                         startDate: preset.startDate,
                         endDate: preset.endDate,
-                      })
-                    }
+                      });
+                      onSilentSync?.();
+                    }}
                     className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition cursor-pointer whitespace-nowrap ${
                       active
                         ? 'bg-emerald-700 text-white'
@@ -790,9 +809,10 @@ export const PerizinanPulangPanel: React.FC<PerizinanPulangPanelProps> = ({
                 <input
                   type="date"
                   value={dateRange.startDate}
-                  onChange={(e) =>
-                    setDateRange({ ...dateRange, startDate: e.target.value })
-                  }
+                  onChange={(e) => {
+                    setDateRange({ ...dateRange, startDate: e.target.value });
+                    onSilentSync?.();
+                  }}
                   className="w-full rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono"
                 />
               </div>
@@ -803,9 +823,10 @@ export const PerizinanPulangPanel: React.FC<PerizinanPulangPanelProps> = ({
                 <input
                   type="date"
                   value={dateRange.endDate}
-                  onChange={(e) =>
-                    setDateRange({ ...dateRange, endDate: e.target.value })
-                  }
+                  onChange={(e) => {
+                    setDateRange({ ...dateRange, endDate: e.target.value });
+                    onSilentSync?.();
+                  }}
                   className="w-full rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono"
                 />
               </div>

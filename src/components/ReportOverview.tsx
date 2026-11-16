@@ -32,11 +32,15 @@ import {
   getTodayDateISO,
   getDynamicDatePresets,
   normalizeDateYYYYMMDD,
+  normalizeDateRangeBounds,
   getLaporanRowKey,
   findDuplicateLaporanKeys,
   cleanDisplayName,
 } from '../utils/ukpSyncEngine';
-import { type PerizinanRow } from '../utils/perizinanEngine';
+import {
+  type PerizinanRow,
+  normalizePerizinanDate,
+} from '../utils/perizinanEngine';
 import {
   type SholatRow,
   filterSholatByDateRange,
@@ -55,6 +59,9 @@ interface ReportOverviewProps {
   onDateRangeChange: (range: DateRangeFilter) => void;
   lastSyncTime: string | null;
   onQuickSync?: () => void;
+  onSilentSync?: () => void;
+  onPullByDateRange?: (range: DateRangeFilter) => Promise<void>;
+  isSyncing?: boolean;
   onDeleteLaporan?: (row: LaporanMusyrifRow) => void;
   mode?: 'FULL' | 'OVERVIEW_ONLY' | 'WA_ONLY';
 }
@@ -69,6 +76,9 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   onDateRangeChange,
   lastSyncTime,
   onQuickSync,
+  onSilentSync,
+  onPullByDateRange,
+  isSyncing = false,
   onDeleteLaporan,
   mode = 'FULL',
 }) => {
@@ -103,13 +113,16 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   }, [dateFilteredList]);
 
   const filteredPerizinanList = useMemo(() => {
-    const { startDate, endDate } = dateRange;
-    if (!startDate.trim() && !endDate.trim()) return perizinanList;
+    const { start, end } = normalizeDateRangeBounds({
+      startDate: normalizePerizinanDate(dateRange.startDate),
+      endDate: normalizePerizinanDate(dateRange.endDate),
+    });
+    if (!start && !end) return perizinanList;
     return perizinanList.filter((p) => {
-      const tgl = p.dariTanggal || '';
-      if (!tgl) return false;
-      if (startDate && tgl < startDate) return false;
-      if (endDate && tgl > endDate) return false;
+      const tgl = normalizePerizinanDate(p.dariTanggal || '');
+      if (!tgl || !/^\d{4}-\d{2}-\d{2}$/.test(tgl)) return false;
+      if (start && tgl < start) return false;
+      if (end && tgl > end) return false;
       return true;
     });
   }, [perizinanList, dateRange]);
@@ -560,21 +573,37 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
         data-testid="report-overview-date-filter"
         className="mb-4 rounded-2xl bg-stone-50/90 border border-slate-200/80 p-3.5 space-y-2.5"
       >
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
             <CalendarRange className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
             <span>Filter Rentang Tanggal (Pantauan Bulanan)</span>
           </div>
-          {isDateFiltered && (
-            <button
-              type="button"
-              onClick={() => onDateRangeChange({ startDate: '', endDate: '' })}
-              className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 flex items-center gap-1 cursor-pointer whitespace-nowrap"
-            >
-              <RotateCcw className="w-3 h-3" />
-              <span>Reset Tanggal</span>
-            </button>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {onPullByDateRange && (
+              <button
+                type="button"
+                onClick={() => onPullByDateRange(dateRange)}
+                disabled={isSyncing}
+                className="px-2.5 py-1 rounded-lg bg-[#075e54] hover:bg-[#054c42] text-white text-[11px] font-semibold transition flex items-center gap-1 cursor-pointer whitespace-nowrap disabled:opacity-60"
+              >
+                <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span>{isSyncing ? 'Menarik Data...' : 'Tarik Data Rentang Ini'}</span>
+              </button>
+            )}
+            {isDateFiltered && (
+              <button
+                type="button"
+                onClick={() => {
+                  onDateRangeChange({ startDate: '', endDate: '' });
+                  onSilentSync?.();
+                }}
+                className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 flex items-center gap-1 cursor-pointer whitespace-nowrap"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Reset Tanggal</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Preset Rentang Bulanan / Harian (Real-Time) */}
@@ -587,12 +616,13 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
               <button
                 key={preset.label}
                 type="button"
-                onClick={() =>
+                onClick={() => {
                   onDateRangeChange({
                     startDate: preset.startDate,
                     endDate: preset.endDate,
-                  })
-                }
+                  });
+                  onSilentSync?.();
+                }}
                 aria-pressed={isPresetActive}
                 className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition cursor-pointer whitespace-nowrap ${
                   isPresetActive
@@ -619,12 +649,13 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
               id="overview-start-date"
               type="date"
               value={dateRange.startDate}
-              onChange={(e) =>
+              onChange={(e) => {
                 onDateRangeChange({
                   ...dateRange,
                   startDate: e.target.value,
-                })
-              }
+                });
+                onSilentSync?.();
+              }}
               className="w-full rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono tabular-nums text-slate-800 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
             />
           </div>
@@ -639,12 +670,13 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
               id="overview-end-date"
               type="date"
               value={dateRange.endDate}
-              onChange={(e) =>
+              onChange={(e) => {
                 onDateRangeChange({
                   ...dateRange,
                   endDate: e.target.value,
-                })
-              }
+                });
+                onSilentSync?.();
+              }}
               className="w-full rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono tabular-nums text-slate-800 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
             />
           </div>

@@ -405,11 +405,20 @@ function normalizeAllDataResponse(data: GasAllDataResponse): GasAllDataResponse 
 }
 
 export function normalizeSholatList(list: SholatRow[]): SholatRow[] {
-  return list.map((s) => ({
-    ...s,
-    namaSantri: cleanDisplayName(s.namaSantri),
-    tanggal: normalizeDateYYYYMMDD(s.tanggal),
-  }));
+  return list.map((s) => {
+    const normTgl = normalizeDateYYYYMMDD(s.tanggal || '');
+    const normTs = normalizeDateYYYYMMDD(s.timestamp || '');
+    const validTgl = /^\d{4}-\d{2}-\d{2}$/.test(normTgl)
+      ? normTgl
+      : /^\d{4}-\d{2}-\d{2}$/.test(normTs)
+      ? normTs
+      : normTgl;
+    return {
+      ...s,
+      namaSantri: cleanDisplayName(s.namaSantri),
+      tanggal: validTgl,
+    };
+  });
 }
 
 function parseJsonOrExplainHtml<T>(rawText: string): T {

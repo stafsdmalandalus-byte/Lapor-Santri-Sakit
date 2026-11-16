@@ -3,6 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import {
+  normalizeDateYYYYMMDD,
+  normalizeDateRangeBounds,
+} from './ukpSyncEngine';
+
 export type SholatStatus = 'TEPAT' | 'TELAT' | 'ALFA' | 'IZIN';
 
 export interface SholatRow {
@@ -107,6 +112,14 @@ export function normalizeSantriKey(name: string): string {
     .replace(/\s+/g, ' ');
 }
 
+export function getEffectiveSholatDate(row: Pick<SholatRow, 'tanggal' | 'timestamp'>): string {
+  const fromTgl = normalizeDateYYYYMMDD(row.tanggal || '');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(fromTgl)) return fromTgl;
+  const fromTs = normalizeDateYYYYMMDD(row.timestamp || '');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(fromTs)) return fromTs;
+  return fromTgl;
+}
+
 /**
  * Mencari data rekap sholat aktif (belum diputihkan) untuk santri dan tanggal yang sama.
  * Jika ada lebih dari 1 baris lama pada tanggal yang sama, status TELAT akan digabungkan (dikunci).
@@ -116,14 +129,14 @@ export function findExistingSholatRecordForDate(
   tanggal: string,
   namaSantri: string
 ): SholatRow | null {
-  const targetDate = String(tanggal || '').trim();
+  const targetDate = normalizeDateYYYYMMDD(tanggal || '');
   const targetName = normalizeSantriKey(namaSantri);
   if (!targetDate || !targetName) return null;
 
   const matchingRows = list.filter(
     (r) =>
       !isSholatRowPutih(r) &&
-      String(r.tanggal || '').trim() === targetDate &&
+      getEffectiveSholatDate(r) === targetDate &&
       normalizeSantriKey(r.namaSantri) === targetName
   );
 
@@ -194,7 +207,7 @@ export function upsertSholatRowInList(
   list: SholatRow[],
   newRow: SholatRow
 ): SholatRow[] {
-  const targetDate = String(newRow.tanggal || '').trim();
+  const targetDate = getEffectiveSholatDate(newRow);
   const targetName = normalizeSantriKey(newRow.namaSantri);
 
   let foundIndex = -1;
@@ -205,7 +218,7 @@ export function upsertSholatRowInList(
     const isSameActiveRecord =
       !isSholatRowPutih(r) &&
       (r.idSholat === newRow.idSholat ||
-        (String(r.tanggal || '').trim() === targetDate &&
+        (getEffectiveSholatDate(r) === targetDate &&
           normalizeSantriKey(r.namaSantri) === targetName));
 
     if (isSameActiveRecord) {
@@ -233,21 +246,22 @@ export function filterSholatByDateRange(
   list: SholatRow[],
   range: { startDate: string; endDate: string }
 ): SholatRow[] {
-  const { startDate, endDate } = range;
-  if (!startDate.trim() && !endDate.trim()) return list;
+  const { start, end } = normalizeDateRangeBounds(range);
+  if (!start && !end) return list;
 
   return list.filter((row) => {
-    const tgl = row.tanggal;
-    if (!tgl) return false;
-    if (startDate && tgl < startDate) return false;
-    if (endDate && tgl > endDate) return false;
+    const tgl = getEffectiveSholatDate(row);
+    if (!tgl || !/^\d{4}-\d{2}-\d{2}$/.test(tgl)) return false;
+    if (start && tgl < start) return false;
+    if (end && tgl > end) return false;
     return true;
   });
 }
 
 export function formatSholatDateID(dateStr: string): string {
-  if (!dateStr || !dateStr.trim()) return '-';
-  const parts = dateStr.trim().split('-');
+  const norm = normalizeDateYYYYMMDD(dateStr || '');
+  if (!norm || !norm.trim()) return '-';
+  const parts = norm.trim().split('-');
   if (parts.length !== 3) return dateStr;
   const months = [
     'Jan',
@@ -351,7 +365,7 @@ export function generateSholatWhatsAppReport(params: {
           ]
         : []),
       '━━━━━━━━━━━━━━━━━━━━',
-      '_Bagian Pengasuhan Pesantren Al-Andalus_',
+      '_Bidang Pengasuhan Pesantren Al-Andalus_',
     ];
 
     return lines.join('\n');
@@ -388,7 +402,7 @@ export function generateSholatWhatsAppReport(params: {
 
   lines.push('');
   lines.push('━━━━━━━━━━━━━━━━━━━━');
-  lines.push('_Bagian Pengasuhan Pesantren Al-Andalus_');
+  lines.push('_Bidang Pengasuhan Pesantren Al-Andalus_');
 
   return lines.join('\n');
 }

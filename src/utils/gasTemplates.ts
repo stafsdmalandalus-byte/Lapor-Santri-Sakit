@@ -566,7 +566,7 @@ function cleanPersonName_(val) {
 }
 
 /**
- * Helper: Menormalkan format tanggal dari Google Sheets ke YYYY-MM-DD (termasuk "10 November 2026")
+ * Helper: Menormalkan format tanggal dari Google Sheets ke YYYY-MM-DD (DD/MM/YYYY, MM/DD/YYYY, ISO, "10 November 2026")
  */
 function normalizeDateStr_(val) {
   if (!val) return '';
@@ -575,19 +575,40 @@ function normalizeDateStr_(val) {
   }
   const s = String(val || '').trim();
   if (/^\\d{4}-\\d{2}-\\d{2}$/.test(s)) return s;
-  const dmy = s.match(/^(\\d{1,2})[\\/-](\\d{1,2})[\\/-](\\d{4})/);
-  if (dmy) {
-    return dmy[3] + '-' + String(dmy[2]).padStart(2, '0') + '-' + String(dmy[1]).padStart(2, '0');
-  }
-  const ymd = s.match(/^(\\d{4})[\\/-](\\d{1,2})[\\/-](\\d{1,2})/);
+  const ymd = s.match(/^(\\d{4})[\\/-](\\d{1,2})[\\/-](\\d{1,2})(?:[T\\s].*)?$/);
   if (ymd) {
-    return ymd[1] + '-' + String(ymd[2]).padStart(2, '0') + '-' + String(ymd[3]).padStart(2, '0');
+    const mNum = parseInt(ymd[2], 10);
+    const dNum = parseInt(ymd[3], 10);
+    if (mNum >= 1 && mNum <= 12 && dNum >= 1 && dNum <= 31) {
+      return ymd[1] + '-' + String(mNum).padStart(2, '0') + '-' + String(dNum).padStart(2, '0');
+    }
+  }
+  const dmy = s.match(/^(\\d{1,2})[\\/-](\\d{1,2})[\\/-](\\d{4})(?:[T\\s].*)?$/);
+  if (dmy) {
+    const first = parseInt(dmy[1], 10);
+    const second = parseInt(dmy[2], 10);
+    let day = first;
+    let month = second;
+    if (second > 12 && first >= 1 && first <= 12) {
+      month = first;
+      day = second;
+    }
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return dmy[3] + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+    }
   }
   const textMonth = s.match(/^(\\d{1,2})[\\s\\/-]+([a-zA-Z]+)[\\s,\\/-]+(\\d{4})/);
   if (textMonth) {
     const mm = MONTH_MAP_[textMonth[2].toLowerCase()];
     if (mm) {
       return textMonth[3] + '-' + mm + '-' + String(textMonth[1]).padStart(2, '0');
+    }
+  }
+  const usTextMonth = s.match(/^([a-zA-Z]+)[\\s\\/-]+(\\d{1,2}),?[\\s\\/-]+(\\d{4})/);
+  if (usTextMonth) {
+    const mm = MONTH_MAP_[usTextMonth[1].toLowerCase()];
+    if (mm) {
+      return usTextMonth[3] + '-' + mm + '-' + String(usTextMonth[2]).padStart(2, '0');
     }
   }
   return s;
@@ -1934,8 +1955,13 @@ function resetRekapSholatRange(payload) {
 
     const headerWidth = Math.max(15, sheet.getLastColumn());
     const cols = detectSholatColumns_(sheet.getRange(1, 1, 1, headerWidth).getDisplayValues()[0]);
-    const startDate = String(payload.startDate || '').trim();
-    const endDate = String(payload.endDate || '').trim();
+    let startDate = normalizeDateStr_(payload.startDate || '');
+    let endDate = normalizeDateStr_(payload.endDate || '');
+    if (startDate && endDate && startDate > endDate) {
+      const tmp = startDate;
+      startDate = endDate;
+      endDate = tmp;
+    }
     const ketBaru = String(
       payload.keterangan ||
         ('DIPUTIHKAN (' + Utilities.formatDate(new Date(), TIMEZONE, 'dd/MM/yyyy HH:mm') + ')')
@@ -1947,8 +1973,8 @@ function resetRekapSholatRange(payload) {
       const row = data[i];
       const tgl = normalizeDateStr_(row[cols.idxTgl]);
       let match = true;
-      if (startDate && tgl < startDate) match = false;
-      if (endDate && tgl > endDate) match = false;
+      if (startDate && (!tgl || tgl < startDate)) match = false;
+      if (endDate && (!tgl || tgl > endDate)) match = false;
 
       if (match || (!startDate && !endDate)) {
         sheet.getRange(i + 2, cols.idxKet + 1).setValue(ketBaru);

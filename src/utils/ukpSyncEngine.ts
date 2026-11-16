@@ -780,22 +780,41 @@ export interface DateRangeFilter {
 }
 
 /**
+ * Menormalkan batas rentang tanggal (start <= end) dan format tanggalnya ke YYYY-MM-DD
+ */
+export function normalizeDateRangeBounds(range: DateRangeFilter): {
+  start: string;
+  end: string;
+} {
+  const rawStart = normalizeDateYYYYMMDD(range?.startDate || '');
+  const rawEnd = normalizeDateYYYYMMDD(range?.endDate || '');
+  const start = /^\d{4}-\d{2}-\d{2}$/.test(rawStart) ? rawStart : '';
+  const end = /^\d{4}-\d{2}-\d{2}$/.test(rawEnd) ? rawEnd : '';
+
+  if (start && end && start > end) {
+    return { start: end, end: start };
+  }
+  return { start, end };
+}
+
+/**
  * Memfilter daftar laporan berdasarkan rentang Tanggal_Laporan (Kolom C, format YYYY-MM-DD)
  */
 export function filterLaporanByDateRange(
   laporanRows: LaporanMusyrifRow[],
   range: DateRangeFilter
 ): LaporanMusyrifRow[] {
-  const start = normalizeDateYYYYMMDD(range.startDate);
-  const end = normalizeDateYYYYMMDD(range.endDate);
+  const { start, end } = normalizeDateRangeBounds(range);
 
   if (!start && !end) {
     return laporanRows;
   }
 
   return laporanRows.filter((row) => {
-    const tgl = normalizeDateYYYYMMDD(row.tanggalLaporan);
-    if (!tgl) return false;
+    const tgl =
+      normalizeDateYYYYMMDD(row.tanggalLaporan) ||
+      normalizeDateYYYYMMDD(row.timestamp);
+    if (!tgl || !/^\d{4}-\d{2}-\d{2}$/.test(tgl)) return false;
     if (start && tgl < start) return false;
     if (end && tgl > end) return false;
     return true;
@@ -1008,7 +1027,7 @@ const MONTH_NAME_MAP: Record<string, string> = {
 };
 
 /**
- * Menormalkan berbagai format tanggal (DD/MM/YYYY, DD-MM-YYYY, YYYY/MM/DD, "10 November 2026", ISO) menjadi YYYY-MM-DD
+ * Menormalkan berbagai format tanggal (DD/MM/YYYY, MM/DD/YYYY, YYYY/MM/DD, "10 November 2026", ISO, serial) menjadi YYYY-MM-DD
  */
 export function normalizeDateYYYYMMDD(raw: string): string {
   const clean = String(raw || '').trim();
@@ -1019,28 +1038,33 @@ export function normalizeDateYYYYMMDD(raw: string): string {
     return clean;
   }
 
-  // Format YYYY-MM-DDTHH:mm...
-  const isoMatch = clean.match(/^(\d{4})-(\d{2})-(\d{2})T/);
-  if (isoMatch) {
-    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  // Format YYYY-M-D atau YYYY-MM-DDTHH:mm... atau YYYY/MM/DD HH:mm...
+  const ymdMatch = clean.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:[T\s].*)?$/);
+  if (ymdMatch) {
+    const y = ymdMatch[1];
+    const mNum = parseInt(ymdMatch[2], 10);
+    const dNum = parseInt(ymdMatch[3], 10);
+    if (mNum >= 1 && mNum <= 12 && dNum >= 1 && dNum <= 31) {
+      return `${y}-${String(mNum).padStart(2, '0')}-${String(dNum).padStart(2, '0')}`;
+    }
   }
 
-  // Format DD/MM/YYYY atau DD-MM-YYYY
-  const dmyMatch = clean.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+  // Format DD/MM/YYYY atau MM/DD/YYYY (dengan opsional jam di belakang)
+  const dmyMatch = clean.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:[T\s].*)?$/);
   if (dmyMatch) {
-    const d = dmyMatch[1].padStart(2, '0');
-    const m = dmyMatch[2].padStart(2, '0');
+    const first = parseInt(dmyMatch[1], 10);
+    const second = parseInt(dmyMatch[2], 10);
     const y = dmyMatch[3];
-    return `${y}-${m}-${d}`;
-  }
-
-  // Format YYYY/MM/DD
-  const ymdSlash = clean.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
-  if (ymdSlash) {
-    const y = ymdSlash[1];
-    const m = ymdSlash[2].padStart(2, '0');
-    const d = ymdSlash[3].padStart(2, '0');
-    return `${y}-${m}-${d}`;
+    // Jika angka kedua > 12 (mis. 11/16/2026 dari Google Sheet US locale), maka formatnya MM/DD/YYYY
+    let day = first;
+    let month = second;
+    if (second > 12 && first >= 1 && first <= 12) {
+      month = first;
+      day = second;
+    }
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
   }
 
   // Format teks nama bulan Indonesia/Inggris: "09 November 2026", "9 Nov 2026", "9-Nov-2026"
@@ -1068,6 +1092,18 @@ export function normalizeDateYYYYMMDD(raw: string): string {
     const y = usTextMonthMatch[3];
     if (m) {
       return `${y}-${m}-${d}`;
+    }
+  }
+
+  // Format angka serial Google Sheets / Excel (mis. 46342)
+  if (/^\d{5}$/.test(clean)) {
+    const serial = parseInt(clean, 10);
+    if (serial >= 30000 && serial <= 75000) {
+      const utcMs = Date.UTC(1899, 11, 30) + serial * 86400000;
+      const dt = new Date(utcMs);
+      if (!Number.isNaN(dt.getTime())) {
+        return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
+      }
     }
   }
 

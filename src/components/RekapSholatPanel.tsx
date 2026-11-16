@@ -12,13 +12,10 @@ import {
   Trash2,
   RotateCcw,
   ShieldAlert,
-  Download,
   Lock,
   Unlock,
-  MessageCircle,
-  Copy,
-  Check,
-  ExternalLink,
+  FileSpreadsheet,
+  FileText,
   Users,
   User,
   RefreshCw,
@@ -40,8 +37,13 @@ import {
   isSholatRowPutih,
   findExistingSholatRecordForDate,
   formatRincianSholatTelat,
-  generateSholatWhatsAppReport,
+  normalizeSantriKey,
 } from '../utils/sholatEngine';
+import {
+  exportSholatToExcel,
+  exportSholatToPdf,
+  formatSholatPeriodeLabel,
+} from '../utils/sholatExport';
 
 interface RekapSholatPanelProps {
   masterData: MasterSantri[];
@@ -67,8 +69,11 @@ interface RekapSholatPanelProps {
   onDateRangeChange: (range: DateRangeFilter) => void;
   activeMusyrifName?: string;
   onSyncNow?: () => void;
+  onSilentSync?: () => void;
+  onPullByDateRange?: (range: DateRangeFilter) => Promise<void>;
   isSyncing?: boolean;
   lastSyncTime?: string | null;
+  logoUrl?: string;
 }
 
 type PrayerKey = 'subuh' | 'dzuhur' | 'ashar' | 'maghrib' | 'isya';
@@ -84,8 +89,11 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
   onDateRangeChange,
   activeMusyrifName = 'Admin Pengasuhan',
   onSyncNow,
+  onSilentSync,
+  onPullByDateRange,
   isSyncing = false,
   lastSyncTime,
+  logoUrl = '/assets/aistudio/Logo_Al-Andalus_c7d889d5.png',
 }) => {
   const [subTab, setSubTab] = useState<'input' | 'rekap'>('input');
 
@@ -117,12 +125,10 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
     () => new Set()
   );
 
-  // State untuk Generator Rekap WhatsApp
-  const [waMode, setWaMode] = useState<'ALL' | 'SINGLE'>('ALL');
-  const [selectedWaSantri, setSelectedWaSantri] = useState<string>('');
-  const [waPhoneNumber, setWaPhoneNumber] = useState<string>('');
-  const [copiedWa, setCopiedWa] = useState<boolean>(false);
-  const waSectionRef = useRef<HTMLDivElement>(null);
+  // State untuk Ekspor Rekap Excel & PDF (Keseluruhan Anak / Per Anak)
+  const [exportMode, setExportMode] = useState<'ALL' | 'SINGLE'>('ALL');
+  const [selectedExportSantri, setSelectedExportSantri] = useState<string>('');
+  const exportSectionRef = useRef<HTMLDivElement>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const filteredSantri = searchMasterSantri(searchQuery, masterData);
@@ -453,121 +459,115 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
     return map;
   }, [dateFilteredList]);
 
-  // Pastikan pilihan santri WA otomatis terisi bila mode SINGLE dipilih
+  // Pastikan pilihan santri ekspor otomatis terisi bila mode SINGLE dipilih
   useEffect(() => {
     if (
-      waMode === 'SINGLE' &&
-      !selectedWaSantri &&
+      exportMode === 'SINGLE' &&
+      !selectedExportSantri &&
       santriSummaryList.length > 0
     ) {
-      setSelectedWaSantri(santriSummaryList[0].namaSantri);
+      setSelectedExportSantri(santriSummaryList[0].namaSantri);
     }
-  }, [waMode, selectedWaSantri, santriSummaryList]);
+  }, [exportMode, selectedExportSantri, santriSummaryList]);
 
-  const waReportText = useMemo(() => {
-    return generateSholatWhatsAppReport({
+  const periodeLabel = useMemo(
+    () => formatSholatPeriodeLabel(dateRange.startDate, dateRange.endDate),
+    [dateRange.startDate, dateRange.endDate]
+  );
+
+  const selectedSingleSummary = useMemo(() => {
+    if (!selectedExportSantri) return santriSummaryList[0] || null;
+    const key = normalizeSantriKey(selectedExportSantri);
+    return (
+      santriSummaryList.find((s) => normalizeSantriKey(s.namaSantri) === key) ||
+      null
+    );
+  }, [santriSummaryList, selectedExportSantri]);
+
+  const handleExportExcel = async (
+    overrideMode?: 'ALL' | 'SINGLE',
+    overrideSantriName?: string
+  ) => {
+    const modeToUse = overrideMode || exportMode;
+    const santriToUse =
+      overrideSantriName ||
+      selectedExportSantri ||
+      santriSummaryList[0]?.namaSantri ||
+      '';
+
+    if (modeToUse === 'SINGLE' && !santriToUse) {
+      await Swal.fire({
+        icon: 'warning',
+        title: 'Pilih Santri Terlebih Dahulu',
+        text: 'Belum ada data santri yang bisa diekspor pada rentang tanggal ini.',
+        confirmButtonColor: '#075e54',
+      });
+      return;
+    }
+
+    const res = exportSholatToExcel({
       summaries: santriSummaryList,
+      dailyRows: dateFilteredList,
       startDate: dateRange.startDate,
       endDate: dateRange.endDate,
-      mode: waMode,
-      selectedSantriName: selectedWaSantri,
+      mode: modeToUse,
+      selectedSantriName: santriToUse,
+      pencatatBySantri,
     });
-  }, [santriSummaryList, dateRange.startDate, dateRange.endDate, waMode, selectedWaSantri]);
-
-  const waLinkUrl = useMemo(() => {
-    const cleanPhone = waPhoneNumber.replace(/\D/g, '');
-    const normalizedPhone = cleanPhone.startsWith('0')
-      ? '62' + cleanPhone.slice(1)
-      : cleanPhone;
-    const encoded = encodeURIComponent(waReportText);
-    return normalizedPhone
-      ? `https://wa.me/${normalizedPhone}?text=${encoded}`
-      : `https://wa.me/?text=${encoded}`;
-  }, [waPhoneNumber, waReportText]);
-
-  const handleCopyWaText = async () => {
-    try {
-      await navigator.clipboard.writeText(waReportText);
-      setCopiedWa(true);
-      setTimeout(() => setCopiedWa(false), 2500);
-      await Swal.fire({
-        icon: 'success',
-        title: 'Format Rekap WA Disalin!',
-        html: `<div class="text-left text-xs text-slate-600 space-y-2">
-          <p>Rekap keterlambatan sholat siap ditempelkan ke WhatsApp:</p>
-          <pre class="bg-slate-100 p-3 rounded-xl font-mono text-[11px] whitespace-pre-wrap max-h-52 overflow-y-auto">${waReportText}</pre>
-        </div>`,
-        confirmButtonColor: '#075e54',
-        confirmButtonText: 'Selesai',
-      });
-    } catch {
-      // ignore
-    }
-  };
-
-  const handleQuickWaForSantri = (namaSantri: string) => {
-    setWaMode('SINGLE');
-    setSelectedWaSantri(namaSantri);
-    if (waSectionRef.current) {
-      waSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-  };
-
-  const handleDownloadSholatCsv = async () => {
-    const headers = [
-      'No',
-      'Nama Santri',
-      'Kelas',
-      'Kamar',
-      'Subuh Telat (Aktif)',
-      'Dzuhur Telat (Aktif)',
-      'Ashar Telat (Aktif)',
-      'Maghrib Telat (Aktif)',
-      'Isya Telat (Aktif)',
-      'Total Keterlambatan Aktif',
-      'Rincian Sholat Telat',
-      'Catatan Diputihkan',
-    ];
-    const rows = santriSummaryList.map((st, idx) => [
-      idx + 1,
-      `"${st.namaSantri}"`,
-      `"${st.kelas}"`,
-      `"${st.kamar}"`,
-      st.subuhTelat,
-      st.dzuhurTelat,
-      st.asharTelat,
-      st.maghribTelat,
-      st.isyaTelat,
-      st.totalTelat,
-      `"${formatRincianSholatTelat(st)}"`,
-      st.diputihkanRecords > 0
-        ? `"DIPUTIHKAN (${st.diputihkanRecords} hari)"`
-        : '"AKTIF"',
-    ]);
-
-    const csvContent = [
-      headers.join(','),
-      ...rows.map((r) => r.join(',')),
-    ].join('\n');
-    const csvWithBom = '\uFEFF' + csvContent;
-    const blob = new Blob([csvWithBom], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `Akumulasi_Keterlambatan_Sholat_${
-      dateRange.startDate || 'Semua'
-    }_sd_${dateRange.endDate || 'Semua'}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
 
     await Swal.fire({
       icon: 'success',
-      title: 'CSV Akumulasi Santri Diunduh!',
-      text: `Berhasil mengunduh rekap keterlambatan ${santriSummaryList.length} santri.`,
+      title: 'File Excel (.xlsx) Diunduh!',
+      html: `<div class="text-xs text-slate-600 space-y-1">
+        <p>File rekap <b>${res.filename}</b> (${res.rowCount} santri · ${periodeLabel}) berhasil diunduh.</p>
+        <p class="text-[11px] text-slate-500">Berisi sheet <b>Rekap Akumulasi</b> dan <b>Log Harian</b> lengkap dengan rentang tanggal, nama, kelas, asrama, total telat, dan rincian sholat.</p>
+      </div>`,
       confirmButtonColor: '#075e54',
-      timer: 1800,
+      timer: 2200,
+    });
+  };
+
+  const handleExportPdf = async (
+    overrideMode?: 'ALL' | 'SINGLE',
+    overrideSantriName?: string
+  ) => {
+    const modeToUse = overrideMode || exportMode;
+    const santriToUse =
+      overrideSantriName ||
+      selectedExportSantri ||
+      santriSummaryList[0]?.namaSantri ||
+      '';
+
+    if (modeToUse === 'SINGLE' && !santriToUse) {
+      await Swal.fire({
+        icon: 'warning',
+        title: 'Pilih Santri Terlebih Dahulu',
+        text: 'Belum ada data santri yang bisa diekspor pada rentang tanggal ini.',
+        confirmButtonColor: '#075e54',
+      });
+      return;
+    }
+
+    const res = await exportSholatToPdf({
+      summaries: santriSummaryList,
+      dailyRows: dateFilteredList,
+      startDate: dateRange.startDate,
+      endDate: dateRange.endDate,
+      mode: modeToUse,
+      selectedSantriName: santriToUse,
+      pencatatBySantri,
+      logoUrl,
+    });
+
+    await Swal.fire({
+      icon: 'success',
+      title: 'File PDF (.pdf) Diunduh!',
+      html: `<div class="text-xs text-slate-600 space-y-1">
+        <p>File rekap <b>${res.filename}</b> (${res.rowCount} santri · ${periodeLabel}) berhasil diunduh.</p>
+        <p class="text-[11px] text-slate-500">Memuat rentang tanggal, nama santri, kelas, asrama, total keterlambatan, dan rincian sholat telat.</p>
+      </div>`,
+      confirmButtonColor: '#075e54',
+      timer: 2200,
     });
   };
 
@@ -732,7 +732,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
             </h2>
           </div>
           <p className="text-xs text-emerald-100 mt-1">
-            Penguncian Otomatis Harian · Rekap WhatsApp Per Anak &amp; Keseluruhan · Sinkron Spreadsheet
+            Penguncian Otomatis Harian · Ekspor Rekap Excel &amp; PDF (Per Anak &amp; Keseluruhan) · Sinkron Spreadsheet
           </p>
         </div>
 
@@ -758,7 +758,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                 : 'text-white hover:bg-white/10'
             }`}
           >
-            📋 Data Rekap &amp; WA ({dateFilteredList.length})
+            📋 Data Rekap &amp; Ekspor ({dateFilteredList.length})
           </button>
         </div>
       </div>
@@ -1043,34 +1043,56 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
               </button>
               <button
                 type="button"
-                onClick={handleDownloadSholatCsv}
+                onClick={() => handleExportExcel('ALL')}
+                className="min-h-[36px] px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shadow-xs"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>Unduh Excel (.xlsx)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExportPdf('ALL')}
                 className="min-h-[36px] px-3 py-1.5 rounded-xl bg-[#07361D] hover:bg-[#0B4627] text-[#F5D000] text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shadow-xs"
               >
-                <Download className="w-3.5 h-3.5" />
-                <span>Unduh CSV Akumulasi Santri</span>
+                <FileText className="w-3.5 h-3.5" />
+                <span>Unduh PDF (.pdf)</span>
               </button>
             </div>
           </div>
 
           {/* Filter Rentang Tanggal */}
           <div className="rounded-2xl bg-stone-50/90 border border-slate-200/80 p-3.5 space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
                 <CalendarRange className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
                 <span>Filter Rentang Tanggal (Dari Tanggal s/d Sampai Tanggal)</span>
               </div>
-              {isDateFiltered && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    onDateRangeChange({ startDate: '', endDate: '' })
-                  }
-                  className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 flex items-center gap-1 cursor-pointer"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  <span>Reset Tanggal</span>
-                </button>
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                {onPullByDateRange && (
+                  <button
+                    type="button"
+                    onClick={() => onPullByDateRange(dateRange)}
+                    disabled={isSyncing}
+                    className="px-2.5 py-1 rounded-lg bg-[#075e54] hover:bg-[#054c42] text-white text-[11px] font-semibold transition flex items-center gap-1 cursor-pointer whitespace-nowrap disabled:opacity-60"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
+                    <span>{isSyncing ? 'Menarik Data...' : 'Tarik Data Rentang Ini'}</span>
+                  </button>
+                )}
+                {isDateFiltered && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onDateRangeChange({ startDate: '', endDate: '' });
+                      onSilentSync?.();
+                    }}
+                    className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 flex items-center gap-1 cursor-pointer"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>Reset Tanggal</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-1.5">
@@ -1082,12 +1104,13 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                   <button
                     key={preset.label}
                     type="button"
-                    onClick={() =>
+                    onClick={() => {
                       onDateRangeChange({
                         startDate: preset.startDate,
                         endDate: preset.endDate,
-                      })
-                    }
+                      });
+                      onSilentSync?.();
+                    }}
                     className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition cursor-pointer whitespace-nowrap ${
                       isPresetActive
                         ? 'bg-emerald-700 text-white shadow-xs'
@@ -1100,7 +1123,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
               })}
             </div>
 
-            <div className="grid grid-cols-2 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <div>
                 <label className="block text-[11px] font-medium text-slate-600 mb-1">
                   Dari Tanggal
@@ -1108,12 +1131,13 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                 <input
                   type="date"
                   value={dateRange.startDate}
-                  onChange={(e) =>
+                  onChange={(e) => {
                     onDateRangeChange({
                       ...dateRange,
                       startDate: e.target.value,
-                    })
-                  }
+                    });
+                    onSilentSync?.();
+                  }}
                   className="w-full rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono tabular-nums text-slate-800"
                 />
               </div>
@@ -1124,29 +1148,32 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                 <input
                   type="date"
                   value={dateRange.endDate}
-                  onChange={(e) =>
+                  onChange={(e) => {
                     onDateRangeChange({
                       ...dateRange,
                       endDate: e.target.value,
-                    })
-                  }
+                    });
+                    onSilentSync?.();
+                  }}
                   className="w-full rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono tabular-nums text-slate-800"
                 />
               </div>
             </div>
 
-            {isDateFiltered && sholatList.length > dateFilteredList.length && (
+            {isDateFiltered && (
               <div className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-amber-900">
                 <span>
-                  ⚠️ Filter tanggal sedang aktif ({dateFilteredList.length} dari {sholatList.length} total catatan ditampilkan).
+                  📅 Periode aktif: <strong>{periodeLabel}</strong> · Menampilkan <strong>{dateFilteredList.length}</strong> dari <strong>{sholatList.length}</strong> catatan di Spreadsheet.
                 </span>
-                <button
-                  type="button"
-                  onClick={() => onDateRangeChange({ startDate: '', endDate: '' })}
-                  className="font-bold text-amber-950 underline hover:text-emerald-800 cursor-pointer"
-                >
-                  Tampilkan Semua Tanggal ({sholatList.length})
-                </button>
+                {sholatList.length > dateFilteredList.length && (
+                  <button
+                    type="button"
+                    onClick={() => onDateRangeChange({ startDate: '', endDate: '' })}
+                    className="font-bold text-amber-950 underline hover:text-emerald-800 cursor-pointer"
+                  >
+                    Tampilkan Semua Tanggal ({sholatList.length})
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -1195,21 +1222,21 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
             </div>
           </div>
 
-          {/* PANEL KIRIM REKAPAN KETERLAMBATAN SHOLAT KE WHATSAPP (Per Anak & Keseluruhan Anak) */}
+          {/* PANEL EKSPOR REKAP KETERLAMBATAN SHOLAT KE EXCEL (.xlsx) & PDF (.pdf) */}
           <div
-            ref={waSectionRef}
+            ref={exportSectionRef}
             className="rounded-2xl bg-emerald-50/70 border border-emerald-200 p-4 space-y-3.5"
           >
             <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-emerald-200/70">
               <div>
                 <h4 className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
-                  <MessageCircle className="w-4 h-4 text-[#075e54]" />
+                  <FileSpreadsheet className="w-4 h-4 text-[#075e54]" />
                   <span>
-                    Kirim Rekapan Keterlambatan Sholat ke WhatsApp (Per Anak &amp; Keseluruhan)
+                    Ekspor Rekapan Keterlambatan Sholat (Excel &amp; PDF)
                   </span>
                 </h4>
                 <p className="text-[11px] text-emerald-800 mt-0.5">
-                  Memuat rentang tanggal, Nama, Kelas, Asrama/Kamar, Total Keseluruhan Telat, dan Rincian Sholat yang Telat beserta jumlahnya.
+                  Memuat <strong>Rentang Tanggal</strong>, <strong>Nama</strong>, <strong>Kelas</strong>, <strong>Asrama/Kamar</strong>, <strong>Total Keterlambatan</strong>, dan <strong>Rincian Sholat Apa Saja yang Telat</strong>.
                 </p>
               </div>
 
@@ -1217,9 +1244,9 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
               <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-emerald-200">
                 <button
                   type="button"
-                  onClick={() => setWaMode('ALL')}
+                  onClick={() => setExportMode('ALL')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                    waMode === 'ALL'
+                    exportMode === 'ALL'
                       ? 'bg-[#075e54] text-white shadow-xs'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
@@ -1229,9 +1256,9 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setWaMode('SINGLE')}
+                  onClick={() => setExportMode('SINGLE')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                    waMode === 'SINGLE'
+                    exportMode === 'SINGLE'
                       ? 'bg-[#075e54] text-white shadow-xs'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
@@ -1242,88 +1269,145 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {waMode === 'SINGLE' && (
-                <div>
-                  <label className="block text-[11px] font-semibold text-emerald-950 mb-1">
-                    Pilih Nama Santri (Rekap Per Anak)
-                  </label>
-                  <select
-                    value={selectedWaSantri}
-                    onChange={(e) => setSelectedWaSantri(e.target.value)}
-                    className="w-full rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:border-[#075e54] focus:outline-none"
-                  >
-                    {santriSummaryList.length === 0 ? (
-                      <option value="">-- Belum ada santri di rentang ini --</option>
-                    ) : (
-                      santriSummaryList.map((st) => (
-                        <option key={st.namaSantri} value={st.namaSantri}>
-                          {st.namaSantri} ({st.kelas} · {st.kamar}) — Total Telat: {st.totalTelat}x
-                        </option>
-                      ))
-                    )}
-                  </select>
-                </div>
-              )}
-
-              <div className={waMode === 'ALL' ? 'sm:col-span-2' : ''}>
+            {exportMode === 'SINGLE' && (
+              <div>
                 <label className="block text-[11px] font-semibold text-emerald-950 mb-1">
-                  Nomor WhatsApp Tujuan (Opsional — Kosongkan bila pilih grup/kontak di WA)
+                  Pilih Nama Santri (Ekspor Rekap Per Anak)
                 </label>
-                <input
-                  type="tel"
-                  value={waPhoneNumber}
-                  onChange={(e) => setWaPhoneNumber(e.target.value)}
-                  placeholder="Contoh: 081234567890 atau kosongkan..."
-                  className="w-full rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-mono text-slate-800 focus:border-[#075e54] focus:outline-none"
-                />
+                <select
+                  value={selectedExportSantri}
+                  onChange={(e) => setSelectedExportSantri(e.target.value)}
+                  className="w-full rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:border-[#075e54] focus:outline-none"
+                >
+                  {santriSummaryList.length === 0 ? (
+                    <option value="">-- Belum ada santri di rentang ini --</option>
+                  ) : (
+                    santriSummaryList.map((st) => (
+                      <option key={st.namaSantri} value={st.namaSantri}>
+                        {st.namaSantri} (Kelas {st.kelas} · {st.kamar}) — Total Telat: {st.totalTelat}x
+                      </option>
+                    ))
+                  )}
+                </select>
               </div>
-            </div>
+            )}
 
-            {/* Preview Format Teks WA */}
-            <div className="bg-white rounded-xl border border-emerald-200/90 p-3">
-              <div className="flex items-center justify-between mb-1.5">
+            {/* Preview Data yang Akan Diekspor */}
+            <div className="bg-white rounded-xl border border-emerald-200/90 p-3.5 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">
-                  Preview Pesan WhatsApp ({waMode === 'ALL' ? 'Keseluruhan Anak' : `Per Anak: ${selectedWaSantri || '-'}`}):
+                  Preview Isi Rekap ({exportMode === 'ALL' ? 'Keseluruhan Anak' : `Per Anak: ${selectedSingleSummary?.namaSantri || '-'}`}):
+                </span>
+                <span className="text-[11px] font-mono font-semibold text-slate-700 bg-slate-100 px-2.5 py-0.5 rounded-md">
+                  🗓️ Rentang: {periodeLabel}
                 </span>
               </div>
-              <pre className="text-[11px] font-mono text-slate-800 whitespace-pre-wrap leading-relaxed max-h-56 overflow-y-auto bg-slate-50 p-3 rounded-lg border border-slate-200/70">
-                {waReportText}
-              </pre>
+
+              {exportMode === 'SINGLE' ? (
+                selectedSingleSummary ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200/80">
+                    <div>
+                      <p className="text-[11px] text-slate-500">Nama Santri</p>
+                      <p className="font-bold text-slate-900">{selectedSingleSummary.namaSantri}</p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] text-slate-500">Kelas &amp; Asrama</p>
+                      <p className="font-semibold text-slate-800">
+                        Kelas {selectedSingleSummary.kelas || '-'} · Asrama {selectedSingleSummary.kamar || '-'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] text-slate-500">Total Keterlambatan</p>
+                      <p className="font-bold text-rose-700 text-sm">
+                        {selectedSingleSummary.totalTelat} Kali
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] text-slate-500">Rincian Sholat Telat</p>
+                      <p className="font-semibold text-slate-800">
+                        {formatRincianSholatTelat(selectedSingleSummary)}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500 py-3 text-center">
+                    Belum ada data santri pada rentang tanggal ini.
+                  </p>
+                )
+              ) : (
+                <div className="overflow-x-auto max-h-48">
+                  <table className="w-full text-left text-[11px]">
+                    <thead>
+                      <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
+                        <th className="p-2">No</th>
+                        <th className="p-2">Nama</th>
+                        <th className="p-2">Kelas</th>
+                        <th className="p-2">Asrama</th>
+                        <th className="p-2 text-center">Total Telat</th>
+                        <th className="p-2">Rincian Sholat Telat</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {santriSummaryList.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="p-3 text-center text-slate-500">
+                            Belum ada data pada rentang tanggal ini.
+                          </td>
+                        </tr>
+                      ) : (
+                        santriSummaryList.slice(0, 6).map((st, idx) => (
+                          <tr key={st.namaSantri}>
+                            <td className="p-2 font-mono text-slate-500">{idx + 1}</td>
+                            <td className="p-2 font-bold text-slate-900">{st.namaSantri}</td>
+                            <td className="p-2 text-slate-700">{st.kelas || '-'}</td>
+                            <td className="p-2 text-slate-700">{st.kamar || '-'}</td>
+                            <td className="p-2 text-center font-bold text-rose-700">
+                              {st.totalTelat}x
+                            </td>
+                            <td className="p-2 text-slate-700">
+                              {formatRincianSholatTelat(st)}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                      {santriSummaryList.length > 6 && (
+                        <tr>
+                          <td colSpan={6} className="p-2 text-center text-[10px] text-slate-500 bg-slate-50">
+                            + {santriSummaryList.length - 6} santri lainnya akan ikut diekspor ke Excel &amp; PDF
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-wrap items-center gap-2.5">
-              <a
-                href={waLinkUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex-1 min-w-[200px] min-h-[40px] px-4 py-2 rounded-xl bg-[#075e54] hover:bg-[#054c42] text-white text-xs font-bold transition flex items-center justify-center gap-2 shadow-xs"
+              <button
+                type="button"
+                onClick={() => handleExportExcel()}
+                className="flex-1 min-w-[180px] min-h-[42px] px-4 py-2 rounded-xl bg-[#075e54] hover:bg-[#054c42] text-white text-xs font-bold transition flex items-center justify-center gap-2 shadow-xs cursor-pointer"
               >
-                <MessageCircle className="w-4 h-4" />
+                <FileSpreadsheet className="w-4 h-4" />
                 <span>
-                  {waMode === 'ALL'
-                    ? 'Kirim Rekap Keseluruhan ke WhatsApp'
-                    : `Kirim Rekap ${selectedWaSantri || 'Santri'} ke WhatsApp`}
+                  {exportMode === 'ALL'
+                    ? 'Unduh Rekap Keseluruhan (Excel .xlsx)'
+                    : `Unduh Rekap ${selectedSingleSummary?.namaSantri || 'Santri'} (Excel .xlsx)`}
                 </span>
-                <ExternalLink className="w-3.5 h-3.5 opacity-80" />
-              </a>
+              </button>
 
               <button
                 type="button"
-                onClick={handleCopyWaText}
-                className="min-h-[40px] px-4 py-2 rounded-xl bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer"
+                onClick={() => handleExportPdf()}
+                className="flex-1 min-w-[180px] min-h-[42px] px-4 py-2 rounded-xl bg-[#07361D] hover:bg-[#0B4627] text-[#F5D000] text-xs font-bold transition flex items-center justify-center gap-2 shadow-xs cursor-pointer"
               >
-                {copiedWa ? (
-                  <>
-                    <Check className="w-4 h-4 text-emerald-700" />
-                    <span>Tersalin!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-4 h-4 text-emerald-700" />
-                    <span>Salin Teks WA</span>
-                  </>
-                )}
+                <FileText className="w-4 h-4" />
+                <span>
+                  {exportMode === 'ALL'
+                    ? 'Unduh Rekap Keseluruhan (PDF .pdf)'
+                    : `Unduh Rekap ${selectedSingleSummary?.namaSantri || 'Santri'} (PDF .pdf)`}
+                </span>
               </button>
             </div>
           </div>
@@ -1362,7 +1446,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                       <th className="p-2.5">Rincian Sholat Telat</th>
                       <th className="p-2.5">Pencatat</th>
                       <th className="p-2.5 text-center">Status</th>
-                      <th className="p-2.5 text-center rounded-r-xl">Rekap WA</th>
+                      <th className="p-2.5 text-center rounded-r-xl">Ekspor Anak</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200/60 font-mono text-[11px]">
@@ -1458,15 +1542,26 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                           )}
                         </td>
                         <td className="p-2.5 text-center font-sans">
-                          <button
-                            type="button"
-                            onClick={() => handleQuickWaForSantri(st.namaSantri)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#075e54] hover:bg-[#054c42] text-white text-[10px] font-bold transition cursor-pointer whitespace-nowrap"
-                            title={`Buat Rekap WA untuk ${st.namaSantri}`}
-                          >
-                            <MessageCircle className="w-3 h-3" />
-                            <span>WA Anak Ini</span>
-                          </button>
+                          <div className="inline-flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleExportExcel('SINGLE', st.namaSantri)}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] font-bold transition cursor-pointer whitespace-nowrap"
+                              title={`Unduh Excel untuk ${st.namaSantri}`}
+                            >
+                              <FileSpreadsheet className="w-3 h-3" />
+                              <span>Excel</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleExportPdf('SINGLE', st.namaSantri)}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[#07361D] hover:bg-[#0B4627] text-[#F5D000] text-[10px] font-bold transition cursor-pointer whitespace-nowrap"
+                              title={`Unduh PDF untuk ${st.namaSantri}`}
+                            >
+                              <FileText className="w-3 h-3" />
+                              <span>PDF</span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1478,8 +1573,32 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
 
           {/* Tabel Data Sholat Harian */}
           {dateFilteredList.length === 0 ? (
-            <div className="text-center py-10 text-xs text-slate-500 bg-stone-50 rounded-2xl border border-slate-200/60">
-              Tidak ada data rekap sholat pada rentang tanggal ini.
+            <div className="text-center py-8 px-4 text-xs text-slate-600 bg-stone-50 rounded-2xl border border-slate-200/70 space-y-3">
+              <p>
+                Tidak ada data rekap sholat pada periode <strong>{periodeLabel}</strong>.
+              </p>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {onPullByDateRange && (
+                  <button
+                    type="button"
+                    onClick={() => onPullByDateRange(dateRange)}
+                    disabled={isSyncing}
+                    className="px-3.5 py-1.5 rounded-xl bg-[#075e54] hover:bg-[#054c42] text-white text-xs font-semibold transition inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                    <span>{isSyncing ? 'Menarik Data...' : 'Tarik Data Terbaru dari Sheet'}</span>
+                  </button>
+                )}
+                {isDateFiltered && (
+                  <button
+                    type="button"
+                    onClick={() => onDateRangeChange({ startDate: '', endDate: '' })}
+                    className="px-3.5 py-1.5 rounded-xl bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-semibold transition cursor-pointer"
+                  >
+                    Tampilkan Semua Tanggal ({sholatList.length})
+                  </button>
+                )}
+              </div>
             </div>
           ) : (
             <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">

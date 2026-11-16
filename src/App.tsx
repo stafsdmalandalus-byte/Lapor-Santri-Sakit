@@ -15,6 +15,8 @@ import {
   runSyncStatusUKP,
   formatTimestampID,
   getLaporanRowKey,
+  normalizeDateRangeBounds,
+  filterLaporanByDateRange,
   type MasterSantri,
   type LaporanMusyrifRow,
   type DataUKPRow,
@@ -40,6 +42,9 @@ import {
   saveSholatListLocally,
   createSholatRow,
   upsertSholatRowInList,
+  filterSholatByDateRange,
+  getEffectiveSholatDate,
+  formatSholatDateID,
   type SholatRow,
   type SholatInput,
 } from './utils/sholatEngine';
@@ -47,6 +52,7 @@ import {
   createPerizinanRow,
   getPerizinanRowKey,
   applyPerpanjanganMasaIzin,
+  filterPerizinanByDateAndName,
   type PerizinanRow,
   type PerizinanInput,
 } from './utils/perizinanEngine';
@@ -66,6 +72,7 @@ import {
   postSholatToGas,
   deleteSholatFromGas,
   resetSholatRangeInGas,
+  type GasAllDataResponse,
 } from './utils/gasClient';
 
 const LOGO_URL = '/assets/aistudio/Logo_Al-Andalus_c7d889d5.png';
@@ -128,9 +135,9 @@ export default function App() {
       targetUrl: string,
       showSuccessAlert: boolean = false,
       isSilent: boolean = false
-    ) => {
-      if (!targetUrl.trim()) return;
-      if (isSilent && isPullingRef.current) return;
+    ): Promise<GasAllDataResponse | null> => {
+      if (!targetUrl.trim()) return null;
+      if (isSilent && isPullingRef.current) return null;
       isPullingRef.current = true;
       if (!isSilent) {
         setIsSyncingGas(true);
@@ -149,6 +156,7 @@ export default function App() {
             res.ukpList || []
           );
           setLaporanList(synced.updatedLaporan);
+          res.laporanList = synced.updatedLaporan;
         }
         if (Array.isArray(res.usersRoleList) && res.usersRoleList.length > 0) {
           setUsersRoleList(res.usersRoleList);
@@ -182,6 +190,7 @@ export default function App() {
             confirmButtonColor: '#0B4627',
           });
         }
+        return res;
       } catch (err) {
         // Fallback hanya jika benar-benar gagal koneksi dan state masih kosong
         setMasterData((prev) => (prev.length === 0 ? INITIAL_MASTER_DATA : prev));
@@ -203,6 +212,7 @@ export default function App() {
             confirmButtonColor: '#0B4627',
           });
         }
+        return null;
       } finally {
         isPullingRef.current = false;
         if (!isSilent) {
@@ -211,6 +221,97 @@ export default function App() {
       }
     },
     []
+  );
+
+  // Tarik data terbaru dari Google Sheets lalu tampilkan ringkasan sesuai rentang tanggal yang dipilih
+  const handlePullDataByDateRange = useCallback(
+    async (
+      range: DateRangeFilter,
+      moduleType: 'sholat' | 'laporan' | 'perizinan' | 'all' = 'all'
+    ) => {
+      const { start, end } = normalizeDateRangeBounds(range);
+      const periodeLabel =
+        start && end
+          ? start === end
+            ? formatSholatDateID(start)
+            : `${formatSholatDateID(start)} s/d ${formatSholatDateID(end)}`
+          : start
+          ? `Mulai ${formatSholatDateID(start)}`
+          : end
+          ? `Sampai ${formatSholatDateID(end)}`
+          : 'Semua Tanggal';
+
+      if (!gasWebAppUrl) {
+        const count =
+          moduleType === 'sholat'
+            ? filterSholatByDateRange(sholatList, range).length
+            : moduleType === 'perizinan'
+            ? filterPerizinanByDateAndName(perizinanList, range, '').length
+            : filterLaporanByDateRange(laporanList, range).length;
+        await Swal.fire({
+          icon: 'info',
+          title: 'Data Lokal Ditampilkan',
+          text: `Ditemukan ${count} data pada rentang ${periodeLabel} (Spreadsheet belum terhubung).`,
+          confirmButtonColor: '#075e54',
+        });
+        return;
+      }
+
+      const res = await pullFromGasSheets(gasWebAppUrl, false, false);
+      if (!res) {
+        await Swal.fire({
+          icon: 'error',
+          title: 'Gagal Menarik Data',
+          text: 'Koneksi ke Google Sheets gagal. Pastikan URL Web App aktif dan akses diset ke Anyone.',
+          confirmButtonColor: '#075e54',
+        });
+        return;
+      }
+
+      const latestSholat = res.sholatList || [];
+      const latestLaporan = res.laporanList || [];
+      const latestPerizinan = res.perizinanList || [];
+
+      const matchedSholat = filterSholatByDateRange(latestSholat, range);
+      const matchedLaporan = filterLaporanByDateRange(latestLaporan, range);
+      const matchedPerizinan = filterPerizinanByDateAndName(
+        latestPerizinan,
+        range,
+        ''
+      );
+
+      let detailHtml = '';
+      if (moduleType === 'sholat') {
+        const hasSholatList = Array.isArray(res.sholatList);
+        detailHtml = `
+          <p>Rentang Tanggal: <b>${periodeLabel}</b></p>
+          <p>Data Rekap Sholat ditemukan: <b>${matchedSholat.length} catatan</b> (dari total ${latestSholat.length} di Spreadsheet).</p>
+          ${
+            !hasSholatList
+              ? '<p class="text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2 mt-1">⚠️ <b>Code.gs</b> belum mengirim <code>sholatList</code>. Perbarui Code.gs &amp; Deploy New version.</p>'
+              : ''
+          }
+        `;
+      } else if (moduleType === 'perizinan') {
+        detailHtml = `
+          <p>Rentang Tanggal: <b>${periodeLabel}</b></p>
+          <p>Data Perizinan ditemukan: <b>${matchedPerizinan.length} surat</b> (dari total ${latestPerizinan.length} di Spreadsheet).</p>
+        `;
+      } else {
+        detailHtml = `
+          <p>Rentang Tanggal: <b>${periodeLabel}</b></p>
+          <p><b>Laporan Sakit:</b> ${matchedLaporan.length}/${latestLaporan.length} · <b>Perizinan:</b> ${matchedPerizinan.length}/${latestPerizinan.length} · <b>Sholat:</b> ${matchedSholat.length}/${latestSholat.length}</p>
+        `;
+      }
+
+      await Swal.fire({
+        icon: 'success',
+        title: 'Data Rentang Tanggal Berhasil Ditarik!',
+        html: `<div class="text-xs text-slate-600 space-y-1.5">${detailHtml}</div>`,
+        confirmButtonColor: '#075e54',
+      });
+    },
+    [gasWebAppUrl, pullFromGasSheets, sholatList, perizinanList, laporanList]
   );
 
   // Tarik otomatis saat pertama kali aplikasi dibuka bila URL Google Apps Script sudah tersimpan
@@ -329,12 +430,13 @@ export default function App() {
     end: string,
     keterangan: string
   ) => {
+    const bounds = normalizeDateRangeBounds({ startDate: start, endDate: end });
     setSholatList((prev) => {
       const updated = prev.map((r) => {
-        const tgl = r.tanggal || '';
+        const tgl = getEffectiveSholatDate(r);
         if (!tgl) return r;
-        if (start && tgl < start) return r;
-        if (end && tgl > end) return r;
+        if (bounds.start && tgl < bounds.start) return r;
+        if (bounds.end && tgl > bounds.end) return r;
         return {
           ...r,
           keterangan: keterangan || 'DIPUTIHKAN',
@@ -347,8 +449,8 @@ export default function App() {
       try {
         const res = await resetSholatRangeInGas(
           gasWebAppUrl,
-          start,
-          end,
+          bounds.start,
+          bounds.end,
           keterangan
         );
         if (Array.isArray(res.sholatList)) {
@@ -1100,6 +1202,9 @@ export default function App() {
                   onDateRangeChange={setDateRange}
                   lastSyncTime={lastSyncTime}
                   onQuickSync={() => executeSyncUKP(true)}
+                  onSilentSync={gasWebAppUrl ? () => pullFromGasSheets(gasWebAppUrl, false, true) : undefined}
+                  onPullByDateRange={(range) => handlePullDataByDateRange(range, 'all')}
+                  isSyncing={isSyncingGas}
                   mode="FULL"
                   onDeleteLaporan={handleDeleteLaporan}
                 />
@@ -1127,6 +1232,8 @@ export default function App() {
                   onExtendPerizinan={handleExtendPerizinan}
                   onDeletePerizinan={handleDeletePerizinan}
                   onSyncNow={gasWebAppUrl ? () => pullFromGasSheets(gasWebAppUrl, true, false) : undefined}
+                  onSilentSync={gasWebAppUrl ? () => pullFromGasSheets(gasWebAppUrl, false, true) : undefined}
+                  onPullByDateRange={(range) => handlePullDataByDateRange(range, 'perizinan')}
                   isSyncing={isSyncingGas}
                   lastSyncTime={lastSyncTime}
                 />
@@ -1156,8 +1263,11 @@ export default function App() {
                   onDateRangeChange={setDateRange}
                   activeMusyrifName={activeMusyrif?.namaMusyrif || (userRole === 'ADMIN_PENGASUHAN' ? 'Admin Pengasuhan' : 'Admin Pusat')}
                   onSyncNow={gasWebAppUrl ? () => pullFromGasSheets(gasWebAppUrl, true, false) : undefined}
+                  onSilentSync={gasWebAppUrl ? () => pullFromGasSheets(gasWebAppUrl, false, true) : undefined}
+                  onPullByDateRange={(range) => handlePullDataByDateRange(range, 'sholat')}
                   isSyncing={isSyncingGas}
                   lastSyncTime={lastSyncTime}
+                  logoUrl={LOGO_URL}
                 />
               </div>
             )}
@@ -1218,7 +1328,9 @@ export default function App() {
                   gasWebAppUrl={gasWebAppUrl}
                   isSyncingGas={isSyncingGas}
                   onSaveAndTestGasUrl={handleSaveAndTestGasUrl}
-                  onPullFromGasNow={() => pullFromGasSheets(gasWebAppUrl, true)}
+                  onPullFromGasNow={async () => {
+                    await pullFromGasSheets(gasWebAppUrl, true);
+                  }}
                 />
               </div>
             )}
