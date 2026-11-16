@@ -28,21 +28,25 @@ const STORAGE_KEY_LOCAL_PERIZINAN = 'alandalus_local_perizinan_rows_v1';
 export const DEFAULT_GAS_WEB_APP_URL =
   'https://script.google.com/macros/s/AKfycbwg9QQYMY6KCd6dAf7t5LCAqSLTxevKR1FrLRzOPahW58EmYGuzGMjl54TDOryzc_5l/exec';
 
-export function getSavedPerizinanList(): PerizinanRow[] {
+export function getSavedPerizinanList(
+  preferEmptyIfUnset: boolean = false
+): PerizinanRow[] {
   try {
     if (typeof window === 'undefined' || !window.localStorage) {
-      return INITIAL_PERIZINAN_DATA;
+      return preferEmptyIfUnset ? [] : INITIAL_PERIZINAN_DATA;
     }
     const raw = localStorage.getItem(STORAGE_KEY_LOCAL_PERIZINAN);
-    if (!raw) return INITIAL_PERIZINAN_DATA;
+    if (!raw) return preferEmptyIfUnset ? [] : INITIAL_PERIZINAN_DATA;
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed as PerizinanRow[];
+    if (Array.isArray(parsed)) {
+      if (parsed.length > 0 || preferEmptyIfUnset) {
+        return parsed as PerizinanRow[];
+      }
     }
   } catch {
     // ignore storage errors
   }
-  return INITIAL_PERIZINAN_DATA;
+  return preferEmptyIfUnset ? [] : INITIAL_PERIZINAN_DATA;
 }
 
 export function savePerizinanListLocally(rows: PerizinanRow[]): void {
@@ -395,13 +399,17 @@ function normalizeAllDataResponse(data: GasAllDataResponse): GasAllDataResponse 
       });
   }
   if (Array.isArray(data.sholatList)) {
-    data.sholatList = data.sholatList.map((s) => ({
-      ...s,
-      namaSantri: cleanDisplayName(s.namaSantri),
-      tanggal: normalizeDateYYYYMMDD(s.tanggal),
-    }));
+    data.sholatList = normalizeSholatList(data.sholatList);
   }
   return data;
+}
+
+export function normalizeSholatList(list: SholatRow[]): SholatRow[] {
+  return list.map((s) => ({
+    ...s,
+    namaSantri: cleanDisplayName(s.namaSantri),
+    tanggal: normalizeDateYYYYMMDD(s.tanggal),
+  }));
 }
 
 function parseJsonOrExplainHtml<T>(rawText: string): T {
@@ -786,24 +794,48 @@ export async function deletePerizinanFromGas(
 
 export async function postSholatToGas(
   gasUrl: string,
-  row: SholatRow
+  row: SholatRow & {
+    unlockedPrayers?: Array<'subuh' | 'dzuhur' | 'ashar' | 'maghrib' | 'isya'>;
+  }
 ): Promise<{ status: string; sholatList?: SholatRow[]; message?: string }> {
   if (!gasUrl.trim()) return { status: 'success' };
-  return postActionToGas(gasUrl, {
+  const res = await postActionToGas<{
+    status: string;
+    sholatList?: SholatRow[];
+    message?: string;
+  }>(gasUrl, {
     action: 'simpanSholat',
     ...row,
   });
+  if (Array.isArray(res.sholatList)) {
+    res.sholatList = normalizeSholatList(res.sholatList);
+  }
+  return res;
 }
 
 export async function deleteSholatFromGas(
   gasUrl: string,
   idSholat: string
-): Promise<{ status: string; deleted?: boolean; message?: string }> {
+): Promise<{
+  status: string;
+  deleted?: boolean;
+  sholatList?: SholatRow[];
+  message?: string;
+}> {
   if (!gasUrl.trim()) return { status: 'success', deleted: true };
-  return postActionToGas(gasUrl, {
+  const res = await postActionToGas<{
+    status: string;
+    deleted?: boolean;
+    sholatList?: SholatRow[];
+    message?: string;
+  }>(gasUrl, {
     action: 'deleteSholat',
     idSholat,
   });
+  if (Array.isArray(res.sholatList)) {
+    res.sholatList = normalizeSholatList(res.sholatList);
+  }
+  return res;
 }
 
 export async function resetSholatRangeInGas(
@@ -811,14 +843,28 @@ export async function resetSholatRangeInGas(
   startDate: string,
   endDate: string,
   keterangan: string
-): Promise<{ status: string; updatedCount?: number; message?: string }> {
+): Promise<{
+  status: string;
+  updatedCount?: number;
+  sholatList?: SholatRow[];
+  message?: string;
+}> {
   if (!gasUrl.trim()) return { status: 'success' };
-  return postActionToGas(gasUrl, {
+  const res = await postActionToGas<{
+    status: string;
+    updatedCount?: number;
+    sholatList?: SholatRow[];
+    message?: string;
+  }>(gasUrl, {
     action: 'resetSholatRange',
     startDate,
     endDate,
     keterangan,
   });
+  if (Array.isArray(res.sholatList)) {
+    res.sholatList = normalizeSholatList(res.sholatList);
+  }
+  return res;
 }
 
 

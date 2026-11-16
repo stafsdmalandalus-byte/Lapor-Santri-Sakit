@@ -37,6 +37,7 @@ export interface SholatInput {
   maghrib: SholatStatus;
   isya: SholatStatus;
   pencatat: string;
+  unlockedPrayers?: Array<'subuh' | 'dzuhur' | 'ashar' | 'maghrib' | 'isya'>;
 }
 
 export interface SantriSholatSummary {
@@ -142,14 +143,17 @@ export function findExistingSholatRecordForDate(
   return merged;
 }
 
-export function getSavedSholatList(): SholatRow[] {
+export function getSavedSholatList(preferEmptyIfUnset: boolean = false): SholatRow[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_SHOLAT);
-    if (!raw) return INITIAL_SHOLAT_DATA;
+    if (!raw) return preferEmptyIfUnset ? [] : INITIAL_SHOLAT_DATA;
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_SHOLAT_DATA;
+    if (Array.isArray(parsed)) {
+      return parsed.length > 0 || preferEmptyIfUnset ? parsed : INITIAL_SHOLAT_DATA;
+    }
+    return preferEmptyIfUnset ? [] : INITIAL_SHOLAT_DATA;
   } catch {
-    return INITIAL_SHOLAT_DATA;
+    return preferEmptyIfUnset ? [] : INITIAL_SHOLAT_DATA;
   }
 }
 

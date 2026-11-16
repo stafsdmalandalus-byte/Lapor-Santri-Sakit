@@ -97,6 +97,9 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
     maghrib: false,
     isya: false,
   });
+  const [unlockedPrayers, setUnlockedPrayers] = useState<Set<PrayerKey>>(
+    () => new Set()
+  );
 
   // State untuk Generator Rekap WhatsApp
   const [waMode, setWaMode] = useState<'ALL' | 'SINGLE'>('ALL');
@@ -154,6 +157,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
         isya: false,
       });
     }
+    setUnlockedPrayers(new Set());
   }, [existingDayRecord]);
 
   useEffect(() => {
@@ -184,6 +188,12 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
   ) => {
     setter('TELAT');
     setSavedLockedMap((prev) => ({ ...prev, [key]: true }));
+    setUnlockedPrayers((prev) => {
+      if (!prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
   };
 
   // Fungsi khusus untuk membuka kunci dan mengubah kembali ke TEPAT
@@ -193,6 +203,11 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
   ) => {
     setter('TEPAT');
     setSavedLockedMap((prev) => ({ ...prev, [key]: false }));
+    setUnlockedPrayers((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -237,10 +252,12 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
       maghrib,
       isya,
       pencatat: activeMusyrifName,
+      unlockedPrayers: Array.from(unlockedPrayers),
     };
 
     const isUpdatingExisting = Boolean(existingDayRecord);
     onAddSholat(input);
+    setUnlockedPrayers(new Set());
 
     await Swal.fire({
       icon: 'success',

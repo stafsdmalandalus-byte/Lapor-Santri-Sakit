@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Swal from 'sweetalert2';
-import { UserCheck, Menu, X, BarChart3, MessageSquare, FileText, Home, Database, Settings } from 'lucide-react';
+import { UserCheck, Menu, X, BarChart3, MessageSquare, FileText, Home, Database, Settings, RefreshCw } from 'lucide-react';
 import {
   INITIAL_MASTER_DATA,
   INITIAL_LAPORAN_MUSYRIF,
@@ -104,52 +104,12 @@ export default function App() {
     getSavedGasUrl() ? [] : INITIAL_USERS_ROLE
   );
   const [perizinanList, setPerizinanList] = useState<PerizinanRow[]>(() =>
-    getSavedPerizinanList()
+    getSavedPerizinanList(Boolean(getSavedGasUrl()))
   );
   const [sholatList, setSholatList] = useState<SholatRow[]>(() =>
-    getSavedSholatList()
+    getSavedSholatList(Boolean(getSavedGasUrl()))
   );
-
-  const handleAddSholat = async (input: SholatInput) => {
-    const newRow = createSholatRow(input);
-    const updated = upsertSholatRowInList(sholatList, newRow);
-    setSholatList(updated);
-    saveSholatListLocally(updated);
-    if (gasWebAppUrl) {
-      postSholatToGas(gasWebAppUrl, newRow).catch(() => {});
-    }
-  };
-
-  const handleDeleteSholat = async (idSholat: string) => {
-    const updated = sholatList.filter((r) => r.idSholat !== idSholat);
-    setSholatList(updated);
-    saveSholatListLocally(updated);
-    if (gasWebAppUrl) {
-      deleteSholatFromGas(gasWebAppUrl, idSholat).catch(() => {});
-    }
-  };
-
-  const handleResetSholatRange = async (
-    start: string,
-    end: string,
-    keterangan: string
-  ) => {
-    const updated = sholatList.map((r) => {
-      const tgl = r.tanggal || '';
-      if (!tgl) return r;
-      if (start && tgl < start) return r;
-      if (end && tgl > end) return r;
-      return {
-        ...r,
-        keterangan: keterangan || 'DIPUTIHKAN',
-      };
-    });
-    setSholatList(updated);
-    saveSholatListLocally(updated);
-    if (gasWebAppUrl) {
-      resetSholatRangeInGas(gasWebAppUrl, start, end, keterangan).catch(() => {});
-    }
-  };
+  const isPullingRef = useRef<boolean>(false);
 
   const [syncLogs, setSyncLogs] = useState<SyncLogItem[]>([]);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(() =>
@@ -164,46 +124,52 @@ export default function App() {
 
   // Fungsi menarik seluruh data sheet (Master_Data, Laporan_Musyrif, Data_UKP, users_role, Perizinan, Rekap_Sholat) dari Google Sheets
   const pullFromGasSheets = useCallback(
-    async (targetUrl: string, showSuccessAlert: boolean = false) => {
+    async (
+      targetUrl: string,
+      showSuccessAlert: boolean = false,
+      isSilent: boolean = false
+    ) => {
       if (!targetUrl.trim()) return;
-      setIsSyncingGas(true);
+      if (isSilent && isPullingRef.current) return;
+      isPullingRef.current = true;
+      if (!isSilent) {
+        setIsSyncingGas(true);
+      }
       try {
         const res = await fetchAllSheetsFromGas(targetUrl);
-        if (res.masterData) {
+        if (Array.isArray(res.masterData)) {
           setMasterData(res.masterData);
         }
-        if (res.ukpList) {
+        if (Array.isArray(res.ukpList)) {
           setUkpList(res.ukpList);
         }
-        if (res.laporanList) {
+        if (Array.isArray(res.laporanList)) {
           const synced = runSyncStatusUKP(
             res.laporanList,
             res.ukpList || []
           );
           setLaporanList(synced.updatedLaporan);
         }
-        if (res.usersRoleList && res.usersRoleList.length > 0) {
+        if (Array.isArray(res.usersRoleList) && res.usersRoleList.length > 0) {
           setUsersRoleList(res.usersRoleList);
         }
-        if (res.perizinanList && res.perizinanList.length > 0) {
+        if (Array.isArray(res.perizinanList)) {
           setPerizinanList(res.perizinanList);
           savePerizinanListLocally(res.perizinanList);
         }
-        if (res.sholatList && res.sholatList.length > 0) {
+        if (Array.isArray(res.sholatList)) {
           setSholatList(res.sholatList);
           saveSholatListLocally(res.sholatList);
         }
-        if (res.lastSyncTime) {
-          setLastSyncTime(res.lastSyncTime);
-        }
+        setLastSyncTime(res.lastSyncTime || formatTimestampID(new Date()));
 
         if (showSuccessAlert) {
           await Swal.fire({
             icon: 'success',
-            title: 'Terhubung ke Google Sheets!',
+            title: 'Data Tersinkronisasi dengan Google Sheets!',
             html: `<div class="text-xs text-slate-600 space-y-1">
-              <p>Data berhasil ditarik langsung dari Google Spreadsheet Anda:</p>
-              <p><b>Master_Data:</b> ${res.masterData?.length ?? 0} santri · <b>Laporan_Musyrif:</b> ${res.laporanList?.length ?? 0} laporan · <b>Rekap_Sholat:</b> ${res.sholatList?.length ?? 0} baris</p>
+              <p>Seluruh data terbaru dari semua Admin &amp; Musyrif telah ditarik:</p>
+              <p><b>Laporan Sakit:</b> ${res.laporanList?.length ?? 0} · <b>Perizinan:</b> ${res.perizinanList?.length ?? 0} · <b>Rekap Sholat:</b> ${res.sholatList?.length ?? 0}</p>
             </div>`,
             confirmButtonColor: '#0B4627',
           });
@@ -230,7 +196,10 @@ export default function App() {
           });
         }
       } finally {
-        setIsSyncingGas(false);
+        isPullingRef.current = false;
+        if (!isSilent) {
+          setIsSyncingGas(false);
+        }
       }
     },
     []
@@ -239,9 +208,130 @@ export default function App() {
   // Tarik otomatis saat pertama kali aplikasi dibuka bila URL Google Apps Script sudah tersimpan
   useEffect(() => {
     if (gasWebAppUrl) {
-      pullFromGasSheets(gasWebAppUrl, false);
+      pullFromGasSheets(gasWebAppUrl, false, false);
     }
   }, [gasWebAppUrl, pullFromGasSheets]);
+
+  // Sinkronisasi otomatis antar perangkat Admin (polling 15 detik + saat pindah tab / kembali ke jendela browser)
+  useEffect(() => {
+    if (!gasWebAppUrl) return;
+
+    const intervalId = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        pullFromGasSheets(gasWebAppUrl, false, true);
+      }
+    }, 15000);
+
+    const handleWindowFocusOrVisible = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        pullFromGasSheets(gasWebAppUrl, false, true);
+      }
+    };
+
+    window.addEventListener('focus', handleWindowFocusOrVisible);
+    document.addEventListener('visibilitychange', handleWindowFocusOrVisible);
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener('focus', handleWindowFocusOrVisible);
+      document.removeEventListener('visibilitychange', handleWindowFocusOrVisible);
+    };
+  }, [gasWebAppUrl, pullFromGasSheets]);
+
+  // Tarik data terbaru secara diam-diam setiap kali Admin berpindah menu agar inputan admin lain langsung terlihat
+  useEffect(() => {
+    if (gasWebAppUrl && userRole !== 'MUSYRIF') {
+      pullFromGasSheets(gasWebAppUrl, false, true);
+    }
+  }, [adminTab, userRole, gasWebAppUrl, pullFromGasSheets]);
+
+  const handleAddSholat = async (input: SholatInput) => {
+    const newRow = createSholatRow(input);
+    setSholatList((prev) => {
+      const updated = upsertSholatRowInList(prev, newRow);
+      saveSholatListLocally(updated);
+      return updated;
+    });
+    if (gasWebAppUrl) {
+      try {
+        const res = await postSholatToGas(gasWebAppUrl, {
+          ...newRow,
+          unlockedPrayers: input.unlockedPrayers,
+        });
+        if (Array.isArray(res.sholatList)) {
+          setSholatList(res.sholatList);
+          saveSholatListLocally(res.sholatList);
+          setLastSyncTime(formatTimestampID(new Date()));
+        } else {
+          await pullFromGasSheets(gasWebAppUrl, false, true);
+        }
+      } catch {
+        // Tetap tersimpan lokal bila jaringan bermasalah
+      }
+    }
+  };
+
+  const handleDeleteSholat = async (idSholat: string) => {
+    setSholatList((prev) => {
+      const updated = prev.filter((r) => r.idSholat !== idSholat);
+      saveSholatListLocally(updated);
+      return updated;
+    });
+    if (gasWebAppUrl) {
+      try {
+        const res = await deleteSholatFromGas(gasWebAppUrl, idSholat);
+        if (Array.isArray(res.sholatList)) {
+          setSholatList(res.sholatList);
+          saveSholatListLocally(res.sholatList);
+          setLastSyncTime(formatTimestampID(new Date()));
+        } else {
+          await pullFromGasSheets(gasWebAppUrl, false, true);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  const handleResetSholatRange = async (
+    start: string,
+    end: string,
+    keterangan: string
+  ) => {
+    setSholatList((prev) => {
+      const updated = prev.map((r) => {
+        const tgl = r.tanggal || '';
+        if (!tgl) return r;
+        if (start && tgl < start) return r;
+        if (end && tgl > end) return r;
+        return {
+          ...r,
+          keterangan: keterangan || 'DIPUTIHKAN',
+        };
+      });
+      saveSholatListLocally(updated);
+      return updated;
+    });
+    if (gasWebAppUrl) {
+      try {
+        const res = await resetSholatRangeInGas(
+          gasWebAppUrl,
+          start,
+          end,
+          keterangan
+        );
+        if (Array.isArray(res.sholatList)) {
+          setSholatList(res.sholatList);
+          saveSholatListLocally(res.sholatList);
+          setLastSyncTime(formatTimestampID(new Date()));
+        } else {
+          await pullFromGasSheets(gasWebAppUrl, false, true);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  };
 
   const handleSaveAndTestGasUrl = async (newUrl: string) => {
     saveGasUrl(newUrl);
@@ -458,7 +548,9 @@ export default function App() {
     });
 
     if (gasWebAppUrl) {
-      postPerizinanToGas(gasWebAppUrl, newRow).catch(() => {});
+      postPerizinanToGas(gasWebAppUrl, newRow)
+        .then(() => pullFromGasSheets(gasWebAppUrl, false, true))
+        .catch(() => {});
     }
 
     return newRow;
@@ -486,7 +578,9 @@ export default function App() {
         targetRow,
         tibaTanggal,
         keteranganTiba
-      ).catch(() => {});
+      )
+        .then(() => pullFromGasSheets(gasWebAppUrl, false, true))
+        .catch(() => {});
     }
   };
 
@@ -513,7 +607,9 @@ export default function App() {
     });
 
     if (gasWebAppUrl) {
-      extendPerizinanInGas(gasWebAppUrl, extendedRow).catch(() => {});
+      extendPerizinanInGas(gasWebAppUrl, extendedRow)
+        .then(() => pullFromGasSheets(gasWebAppUrl, false, true))
+        .catch(() => {});
     }
 
     return extendedRow;
@@ -546,7 +642,9 @@ export default function App() {
     });
 
     if (gasWebAppUrl) {
-      deletePerizinanFromGas(gasWebAppUrl, targetRow).catch(() => {});
+      deletePerizinanFromGas(gasWebAppUrl, targetRow)
+        .then(() => pullFromGasSheets(gasWebAppUrl, false, true))
+        .catch(() => {});
     }
   };
 
@@ -724,7 +822,24 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {gasWebAppUrl && (
+                  <button
+                    type="button"
+                    onClick={() => pullFromGasSheets(gasWebAppUrl, true, false)}
+                    disabled={isSyncingGas}
+                    title={`Tarik data terbaru dari semua Admin (${lastSyncTime || '-'})`}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-700/70 hover:bg-emerald-600 text-white text-[11px] font-semibold transition flex items-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-60"
+                  >
+                    <RefreshCw
+                      className={`w-3.5 h-3.5 ${isSyncingGas ? 'animate-spin' : ''}`}
+                    />
+                    <span className="hidden sm:inline">
+                      {isSyncingGas ? 'Menyinkronkan...' : 'Sinkronkan'}
+                    </span>
+                  </button>
+                )}
+
                 {adminTab !== 'hub' && (
                   <button
                     type="button"

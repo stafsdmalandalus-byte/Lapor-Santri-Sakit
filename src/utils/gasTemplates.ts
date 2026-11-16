@@ -1696,6 +1696,11 @@ function simpanRekapSholat(payload) {
     if (sheet.getLastRow() >= 2) {
       const existingData = sheet.getRange(2, 1, sheet.getLastRow() - 1, 15).getDisplayValues();
       const targetName = cleanPersonName_(namaSantri);
+      const unlockedList = Array.isArray(payload.unlockedPrayers) ? payload.unlockedPrayers : [];
+      const isUnlocked = function(prayerKey) {
+        return unlockedList.indexOf(prayerKey) !== -1;
+      };
+
       for (let i = existingData.length - 1; i >= 0; i--) {
         const r = existingData[i];
         const rId = String(r[0] || '').trim();
@@ -1706,9 +1711,34 @@ function simpanRekapSholat(payload) {
 
         if (!isPutih && (rId === idSholat || (rTgl === tanggal && rNama === targetName))) {
           const rowNumber = i + 2;
+          const prevSubuh   = String(r[7] || 'TEPAT').trim();
+          const prevDzuhur  = String(r[8] || 'TEPAT').trim();
+          const prevAshar   = String(r[9] || 'TEPAT').trim();
+          const prevMaghrib = String(r[10] || 'TEPAT').trim();
+          const prevIsya    = String(r[11] || 'TEPAT').trim();
+
+          const finalSubuh   = (prevSubuh === 'TELAT' && !isUnlocked('subuh')) ? 'TELAT' : subuh;
+          const finalDzuhur  = (prevDzuhur === 'TELAT' && !isUnlocked('dzuhur')) ? 'TELAT' : dzuhur;
+          const finalAshar   = (prevAshar === 'TELAT' && !isUnlocked('ashar')) ? 'TELAT' : ashar;
+          const finalMaghrib = (prevMaghrib === 'TELAT' && !isUnlocked('maghrib')) ? 'TELAT' : maghrib;
+          const finalIsya    = (prevIsya === 'TELAT' && !isUnlocked('isya')) ? 'TELAT' : isya;
+
+          const prevPencatat = String(r[12] || '').trim();
+          let finalPencatat = pencatat;
+          if (prevPencatat && pencatat) {
+            if (prevPencatat.toLowerCase().indexOf(pencatat.toLowerCase()) === -1) {
+              finalPencatat = prevPencatat + ', ' + pencatat;
+            } else {
+              finalPencatat = prevPencatat;
+            }
+          } else if (prevPencatat) {
+            finalPencatat = prevPencatat;
+          }
+
           sheet.getRange(rowNumber, 1, 1, 15).setValues([[
             rId || idSholat, tanggal, nis, namaSantri, kelas, gedung, kamar,
-            subuh, dzuhur, ashar, maghrib, isya, pencatat, timestamp, r[14] || keterangan
+            finalSubuh, finalDzuhur, finalAshar, finalMaghrib, finalIsya,
+            finalPencatat, timestamp, r[14] || keterangan
           ]]);
           return {
             status: 'success',
