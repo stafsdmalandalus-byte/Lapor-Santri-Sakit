@@ -21,6 +21,7 @@ import {
   ExternalLink,
   Users,
   User,
+  RefreshCw,
 } from 'lucide-react';
 import {
   type MasterSantri,
@@ -45,7 +46,16 @@ import {
 interface RekapSholatPanelProps {
   masterData: MasterSantri[];
   sholatList: SholatRow[];
-  onAddSholat: (input: SholatInput) => void;
+  onAddSholat: (
+    input: SholatInput
+  ) => Promise<
+    | {
+        syncedToSheet: boolean;
+        needsGasUpdate?: boolean;
+        errorMessage?: string;
+      }
+    | void
+  >;
   onDeleteSholat: (idSholat: string) => void;
   onResetSholatRange?: (
     startDate: string,
@@ -56,6 +66,9 @@ interface RekapSholatPanelProps {
   dateRange: DateRangeFilter;
   onDateRangeChange: (range: DateRangeFilter) => void;
   activeMusyrifName?: string;
+  onSyncNow?: () => void;
+  isSyncing?: boolean;
+  lastSyncTime?: string | null;
 }
 
 type PrayerKey = 'subuh' | 'dzuhur' | 'ashar' | 'maghrib' | 'isya';
@@ -70,6 +83,9 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
   dateRange,
   onDateRangeChange,
   activeMusyrifName = 'Admin Pengasuhan',
+  onSyncNow,
+  isSyncing = false,
+  lastSyncTime,
 }) => {
   const [subTab, setSubTab] = useState<'input' | 'rekap'>('input');
 
@@ -256,23 +272,44 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
     };
 
     const isUpdatingExisting = Boolean(existingDayRecord);
-    onAddSholat(input);
+    const syncResult = await onAddSholat(input);
     setUnlockedPrayers(new Set());
 
-    await Swal.fire({
-      icon: 'success',
-      title: isUpdatingExisting
-        ? 'Rekap Sholat Diperbarui & Dikunci!'
-        : 'Rekap Sholat Disimpan!',
-      html: `<div class="text-xs text-slate-600 space-y-1">
-        <p>Data keterlambatan sholat untuk <b>${nama}</b> pada tanggal <b>${tanggal}</b> berhasil disimpan dan disinkronkan ke Spreadsheet.</p>
-        <p class="font-mono text-[11px] bg-slate-100 p-2 rounded-lg mt-1">
-          Subuh: <b>${subuh}</b> · Dzuhur: <b>${dzuhur}</b> · Ashar: <b>${ashar}</b> · Maghrib: <b>${maghrib}</b> · Isya: <b>${isya}</b>
-        </p>
-      </div>`,
-      confirmButtonColor: '#075e54',
-      timer: 2200,
-    });
+    if (syncResult && !syncResult.syncedToSheet) {
+      await Swal.fire({
+        icon: 'warning',
+        title: syncResult.needsGasUpdate
+          ? 'Tersimpan Lokal — Perbarui Code.gs Spreadsheet!'
+          : 'Tersimpan Lokal (Belum Sinkron ke Server)',
+        html: `<div class="text-xs text-slate-600 space-y-2 text-left">
+          <p>Data <b>${nama}</b> (${tanggal}) sudah tercatat di perangkat Anda, <b>namun belum terbaca oleh admin/ustadz lain</b>.</p>
+          ${
+            syncResult.needsGasUpdate
+              ? `<p class="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-amber-900">
+                  <b>Penyebab:</b> Script <code>Code.gs</code> di Google Spreadsheet Anda masih versi lama sehingga belum memproses menu <code>Rekap_Sholat</code>.<br/>
+                  <b>Solusi:</b> Buka menu <b>⚙️ Koneksi Sheet &amp; Code.gs</b> → Salin Code.gs terbaru → tempel ke Apps Script Spreadsheet → klik <b>Deploy → Manage deployments → Edit → Version: New version → Deploy</b>.
+                </p>`
+              : `<p class="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-rose-900"><b>Detail:</b> ${syncResult.errorMessage || 'Gagal terhubung ke Google Sheets.'}</p>`
+          }
+        </div>`,
+        confirmButtonColor: '#075e54',
+      });
+    } else {
+      await Swal.fire({
+        icon: 'success',
+        title: isUpdatingExisting
+          ? 'Rekap Sholat Diperbarui & Dikunci!'
+          : 'Rekap Sholat Disimpan!',
+        html: `<div class="text-xs text-slate-600 space-y-1">
+          <p>Data keterlambatan sholat untuk <b>${nama}</b> pada tanggal <b>${tanggal}</b> berhasil disimpan (${activeMusyrifName}) dan disinkronkan ke Spreadsheet agar terbaca oleh seluruh admin &amp; ustadz.</p>
+          <p class="font-mono text-[11px] bg-slate-100 p-2 rounded-lg mt-1">
+            Subuh: <b>${subuh}</b> · Dzuhur: <b>${dzuhur}</b> · Ashar: <b>${ashar}</b> · Maghrib: <b>${maghrib}</b> · Isya: <b>${isya}</b>
+          </p>
+        </div>`,
+        confirmButtonColor: '#075e54',
+        timer: 2400,
+      });
+    }
 
     // Reset form
     setSearchQuery('');
@@ -396,6 +433,24 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
     return Array.from(map.values()).sort(
       (a, b) => b.totalTelat - a.totalTelat
     );
+  }, [dateFilteredList]);
+
+  const pencatatBySantri = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const row of dateFilteredList) {
+      const key = row.namaSantri.toLowerCase().trim();
+      const raw = String(row.pencatat || '').trim();
+      if (!raw) continue;
+      if (!map.has(key)) map.set(key, []);
+      const existing = map.get(key)!;
+      for (const part of raw.split(',')) {
+        const clean = part.trim();
+        if (clean && !existing.includes(clean)) {
+          existing.push(clean);
+        }
+      }
+    }
+    return map;
   }, [dateFilteredList]);
 
   // Pastikan pilihan santri WA otomatis terisi bila mode SINGLE dipilih
@@ -840,6 +895,9 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                   <p className="font-bold">
                     Data {existingDayRecord.namaSantri} pada Tanggal {tanggal} Ditemukan (Otomatis Terkunci)
                   </p>
+                  <p className="text-[11px] font-semibold text-amber-900">
+                    👤 Dicatat sebelumnya oleh: <span className="underline">{existingDayRecord.pencatat || 'Admin'}</span>
+                  </p>
                   <p className="text-[11px] text-amber-800 leading-relaxed">
                     Waktu sholat yang sebelumnya sudah diinput <strong>TELAT</strong> pada tanggal ini otomatis tertulis <strong>TELAT &amp; Terkunci</strong> agar tetap <strong>TELAT</strong> saat Anda menginput waktu sholat lainnya. Jika ingin mengoreksi ke <strong>TEPAT</strong>, klik tombol <strong>&ldquo;Ubah ke Tepat&rdquo;</strong> di bawah waktu sholat terkait.
                   </p>
@@ -957,13 +1015,24 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
             <div>
               <h3 className="text-sm font-bold text-slate-800">
-                Data Rekap Keterlambatan Sholat ({dateFilteredList.length} Catatan)
+                Data Rekap Keterlambatan Sholat ({dateFilteredList.length} Catatan{isDateFiltered && sholatList.length !== dateFilteredList.length ? ` dari ${sholatList.length} total` : ''})
               </h3>
               <p className="text-xs text-slate-500">
-                Daftar kedisiplinan sholat santri, ekspor laporan WhatsApp per anak/keseluruhan, dan pemutihan
+                Menampilkan seluruh catatan dari semua Admin &amp; Ustadz · Sinkron terakhir: {lastSyncTime || '-'}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              {onSyncNow && (
+                <button
+                  type="button"
+                  onClick={onSyncNow}
+                  disabled={isSyncing}
+                  className="min-h-[36px] px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shadow-xs disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                  <span>{isSyncing ? 'Menyinkronkan...' : 'Tarik Data Terbaru'}</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleResetPemutihan}
@@ -1065,6 +1134,21 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                 />
               </div>
             </div>
+
+            {isDateFiltered && sholatList.length > dateFilteredList.length && (
+              <div className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-amber-900">
+                <span>
+                  ⚠️ Filter tanggal sedang aktif ({dateFilteredList.length} dari {sholatList.length} total catatan ditampilkan).
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onDateRangeChange({ startDate: '', endDate: '' })}
+                  className="font-bold text-amber-950 underline hover:text-emerald-800 cursor-pointer"
+                >
+                  Tampilkan Semua Tanggal ({sholatList.length})
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Kartu Ringkasan Total Keterlambatan per Waktu Sholat */}
@@ -1276,6 +1360,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                       <th className="p-2.5 text-center">Isya</th>
                       <th className="p-2.5 text-center">Total Telat</th>
                       <th className="p-2.5">Rincian Sholat Telat</th>
+                      <th className="p-2.5">Pencatat</th>
                       <th className="p-2.5 text-center">Status</th>
                       <th className="p-2.5 text-center rounded-r-xl">Rekap WA</th>
                     </tr>
@@ -1357,6 +1442,9 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                         </td>
                         <td className="p-2.5 font-sans text-[11px] text-slate-700">
                           {formatRincianSholatTelat(st)}
+                        </td>
+                        <td className="p-2.5 font-sans text-[11px] text-slate-700">
+                          {(pencatatBySantri.get(st.namaSantri.toLowerCase().trim()) || []).join(', ') || '-'}
                         </td>
                         <td className="p-2.5 text-center font-sans">
                           {st.diputihkanRecords > 0 ? (
@@ -1463,8 +1551,8 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-slate-400">
-                        Pencatat: {row.pencatat}
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold">
+                        👤 {row.pencatat || 'Admin'}
                       </span>
                       <button
                         type="button"

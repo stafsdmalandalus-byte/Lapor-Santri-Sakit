@@ -157,7 +157,8 @@ export default function App() {
           setPerizinanList(res.perizinanList);
           savePerizinanListLocally(res.perizinanList);
         }
-        if (Array.isArray(res.sholatList)) {
+        const hasSholatList = Array.isArray(res.sholatList);
+        if (hasSholatList && res.sholatList) {
           setSholatList(res.sholatList);
           saveSholatListLocally(res.sholatList);
         }
@@ -165,11 +166,18 @@ export default function App() {
 
         if (showSuccessAlert) {
           await Swal.fire({
-            icon: 'success',
-            title: 'Data Tersinkronisasi dengan Google Sheets!',
-            html: `<div class="text-xs text-slate-600 space-y-1">
+            icon: hasSholatList ? 'success' : 'warning',
+            title: hasSholatList
+              ? 'Data Tersinkronisasi dengan Google Sheets!'
+              : 'Sebagian Data Tersinkronisasi (Perbarui Code.gs)',
+            html: `<div class="text-xs text-slate-600 space-y-1.5">
               <p>Seluruh data terbaru dari semua Admin &amp; Musyrif telah ditarik:</p>
-              <p><b>Laporan Sakit:</b> ${res.laporanList?.length ?? 0} · <b>Perizinan:</b> ${res.perizinanList?.length ?? 0} · <b>Rekap Sholat:</b> ${res.sholatList?.length ?? 0}</p>
+              <p><b>Laporan Sakit:</b> ${res.laporanList?.length ?? 0} · <b>Perizinan:</b> ${res.perizinanList?.length ?? 0} · <b>Rekap Sholat:</b> ${hasSholatList ? (res.sholatList?.length ?? 0) : 'Belum terbaca'}</p>
+              ${
+                !hasSholatList
+                  ? '<p class="text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2 mt-1">⚠️ <b>Code.gs</b> yang ter-deploy belum mengirim <code>sholatList</code>. Salin ulang <b>Code.gs</b> terbaru dari menu <b>Koneksi Sheet</b> lalu klik <b>Deploy → Manage deployments → Edit → Version: New version → Deploy</b>.</p>'
+                  : ''
+              }
             </div>`,
             confirmButtonColor: '#0B4627',
           });
@@ -238,36 +246,59 @@ export default function App() {
     };
   }, [gasWebAppUrl, pullFromGasSheets]);
 
-  // Tarik data terbaru secara diam-diam setiap kali Admin berpindah menu agar inputan admin lain langsung terlihat
+  // Tarik data terbaru secara diam-diam setiap kali akun login, role berubah, atau berpindah tab
   useEffect(() => {
-    if (gasWebAppUrl && userRole !== 'MUSYRIF') {
+    if (gasWebAppUrl) {
       pullFromGasSheets(gasWebAppUrl, false, true);
     }
-  }, [adminTab, userRole, gasWebAppUrl, pullFromGasSheets]);
+  }, [adminTab, userRole, activeMusyrif, gasWebAppUrl, pullFromGasSheets]);
 
-  const handleAddSholat = async (input: SholatInput) => {
+  const handleAddSholat = async (
+    input: SholatInput
+  ): Promise<{
+    syncedToSheet: boolean;
+    needsGasUpdate?: boolean;
+    errorMessage?: string;
+  }> => {
     const newRow = createSholatRow(input);
     setSholatList((prev) => {
       const updated = upsertSholatRowInList(prev, newRow);
       saveSholatListLocally(updated);
       return updated;
     });
-    if (gasWebAppUrl) {
-      try {
-        const res = await postSholatToGas(gasWebAppUrl, {
-          ...newRow,
-          unlockedPrayers: input.unlockedPrayers,
-        });
-        if (Array.isArray(res.sholatList)) {
-          setSholatList(res.sholatList);
-          saveSholatListLocally(res.sholatList);
-          setLastSyncTime(formatTimestampID(new Date()));
-        } else {
-          await pullFromGasSheets(gasWebAppUrl, false, true);
-        }
-      } catch {
-        // Tetap tersimpan lokal bila jaringan bermasalah
+    if (!gasWebAppUrl) {
+      return {
+        syncedToSheet: false,
+        errorMessage: 'URL Web App Google Apps Script belum terhubung.',
+      };
+    }
+    try {
+      const res = await postSholatToGas(gasWebAppUrl, {
+        ...newRow,
+        unlockedPrayers: input.unlockedPrayers,
+      });
+      if (res.status === 'error') {
+        return {
+          syncedToSheet: false,
+          errorMessage: res.message || 'Gagal menyimpan rekap sholat ke Google Sheets.',
+        };
       }
+      if (Array.isArray(res.sholatList)) {
+        setSholatList(res.sholatList);
+        saveSholatListLocally(res.sholatList);
+        setLastSyncTime(formatTimestampID(new Date()));
+        return { syncedToSheet: true };
+      }
+      await pullFromGasSheets(gasWebAppUrl, false, true);
+      return { syncedToSheet: false, needsGasUpdate: true };
+    } catch (err) {
+      return {
+        syncedToSheet: false,
+        errorMessage:
+          err instanceof Error
+            ? err.message
+            : 'Koneksi ke Google Sheets gagal. Data baru tersimpan di perangkat ini.',
+      };
     }
   };
 
@@ -355,17 +386,31 @@ export default function App() {
     if (gasWebAppUrl) {
       try {
         const res = await postLaporanToGas(gasWebAppUrl, input);
+        if (res.status === 'error') {
+          throw new Error(
+            res.message || 'Google Sheets menolak penyimpanan laporan.'
+          );
+        }
         await pullFromGasSheets(gasWebAppUrl, false);
         if (res.idLaporan) {
           return { idLaporan: res.idLaporan };
         }
-      } catch {
-        // Fallback ke state lokal bila jaringan gagal
+        throw new Error(
+          'Script Code.gs belum mengembalikan ID_Laporan. Pastikan Code.gs terbaru sudah di-deploy (New version).'
+        );
+      } catch (err) {
+        const nextSeq = laporanList.length + 1;
+        const localRow = createLaporanRow(input, nextSeq, new Date());
+        setLaporanList((prev) => [localRow, ...prev]);
+        throw new Error(
+          err instanceof Error
+            ? `Data tersimpan sementara di perangkat ini, namun GAGAL sinkron ke Google Sheets (${err.message}).`
+            : 'Data tersimpan sementara di perangkat ini, namun GAGAL sinkron ke Google Sheets.'
+        );
       }
-    } else {
-      await new Promise((resolve) => setTimeout(resolve, 650));
     }
 
+    await new Promise((resolve) => setTimeout(resolve, 650));
     const nextSeq = laporanList.length + 1;
     const newRow = createLaporanRow(input, nextSeq, new Date());
 
@@ -548,9 +593,29 @@ export default function App() {
     });
 
     if (gasWebAppUrl) {
-      postPerizinanToGas(gasWebAppUrl, newRow)
-        .then(() => pullFromGasSheets(gasWebAppUrl, false, true))
-        .catch(() => {});
+      try {
+        const res = await postPerizinanToGas(gasWebAppUrl, newRow);
+        if (res.status === 'error') {
+          throw new Error(res.message || 'Gagal menyimpan izin ke Google Sheets.');
+        }
+        if (Array.isArray(res.perizinanList)) {
+          setPerizinanList(res.perizinanList);
+          savePerizinanListLocally(res.perizinanList);
+          setLastSyncTime(formatTimestampID(new Date()));
+        } else {
+          await pullFromGasSheets(gasWebAppUrl, false, true);
+        }
+      } catch (err) {
+        await Swal.fire({
+          icon: 'warning',
+          title: 'Belum Tersinkron ke Google Sheets',
+          text:
+            err instanceof Error
+              ? `Izin tersimpan di perangkat ini, namun gagal upload ke Spreadsheet (${err.message}). Admin lain belum bisa melihat sebelum sinkron.`
+              : 'Izin tersimpan di perangkat ini, namun gagal upload ke Spreadsheet.',
+          confirmButtonColor: '#0B4627',
+        });
+      }
     }
 
     return newRow;
@@ -673,6 +738,9 @@ export default function App() {
             onDateRangeChange={setDateRange}
             lastSyncTime={lastSyncTime}
             onQuickSync={() => executeSyncUKP(true)}
+            onSyncNow={gasWebAppUrl ? () => pullFromGasSheets(gasWebAppUrl, true, false) : undefined}
+            onSilentSync={gasWebAppUrl ? () => pullFromGasSheets(gasWebAppUrl, false, true) : undefined}
+            isSyncing={isSyncingGas}
             onSubmitLaporan={handleSubmitLaporan}
             logoUrl={LOGO_URL}
           />
@@ -1058,6 +1126,9 @@ export default function App() {
                   onMarkPerizinanReturned={handleMarkPerizinanReturned}
                   onExtendPerizinan={handleExtendPerizinan}
                   onDeletePerizinan={handleDeletePerizinan}
+                  onSyncNow={gasWebAppUrl ? () => pullFromGasSheets(gasWebAppUrl, true, false) : undefined}
+                  isSyncing={isSyncingGas}
+                  lastSyncTime={lastSyncTime}
                 />
               </div>
             )}
@@ -1084,6 +1155,9 @@ export default function App() {
                   dateRange={dateRange}
                   onDateRangeChange={setDateRange}
                   activeMusyrifName={activeMusyrif?.namaMusyrif || (userRole === 'ADMIN_PENGASUHAN' ? 'Admin Pengasuhan' : 'Admin Pusat')}
+                  onSyncNow={gasWebAppUrl ? () => pullFromGasSheets(gasWebAppUrl, true, false) : undefined}
+                  isSyncing={isSyncingGas}
+                  lastSyncTime={lastSyncTime}
                 />
               </div>
             )}

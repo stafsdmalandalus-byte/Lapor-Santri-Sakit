@@ -19,6 +19,7 @@ import {
   RotateCcw,
   UserCheck,
   Building2,
+  RefreshCw,
 } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip } from 'recharts';
 import {
@@ -68,6 +69,9 @@ interface PerizinanPulangPanelProps {
     alasanPerpanjangan: string
   ) => PerizinanRow;
   onDeletePerizinan: (row: PerizinanRow) => void;
+  onSyncNow?: () => void;
+  isSyncing?: boolean;
+  lastSyncTime?: string | null;
 }
 
 type PerizinanSubTab = 'rekap' | 'wa' | 'input' | 'surat';
@@ -81,6 +85,9 @@ export const PerizinanPulangPanel: React.FC<PerizinanPulangPanelProps> = ({
   onMarkPerizinanReturned,
   onExtendPerizinan,
   onDeletePerizinan,
+  onSyncNow,
+  isSyncing = false,
+  lastSyncTime,
 }) => {
   const [subTab, setSubTab] = useState<PerizinanSubTab>('rekap');
   const [statusFilter, setStatusFilter] =
@@ -700,17 +707,30 @@ export const PerizinanPulangPanel: React.FC<PerizinanPulangPanelProps> = ({
                 Rekapitulasi &amp; Pantauan Perizinan Pulang Santri
               </h3>
               <p className="text-xs text-slate-500">
-                Khusus Mode Admin Pengasuhan &amp; SDM · Terintegrasi dengan struktur sheet <span className="font-mono">Perizinan</span>
+                Menampilkan seluruh surat izin dari semua Admin &amp; Ustadz · Sinkron terakhir: {lastSyncTime || '-'}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => setSubTab('input')}
-              className="min-h-[38px] px-3.5 py-2 rounded-xl bg-[#07361D] hover:bg-[#0B4627] text-[#F5D000] text-xs font-bold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-            >
-              <PlusCircle className="w-3.5 h-3.5" />
-              <span>+ Catat Santri Izin Pulang</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {onSyncNow && (
+                <button
+                  type="button"
+                  onClick={onSyncNow}
+                  disabled={isSyncing}
+                  className="min-h-[38px] px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                  <span>{isSyncing ? 'Menyinkronkan...' : 'Tarik Data Terbaru'}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setSubTab('input')}
+                className="min-h-[38px] px-3.5 py-2 rounded-xl bg-[#07361D] hover:bg-[#0B4627] text-[#F5D000] text-xs font-bold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <PlusCircle className="w-3.5 h-3.5" />
+                <span>+ Catat Santri Izin Pulang</span>
+              </button>
+            </div>
           </div>
 
           {/* Filter Tanggal & Pencarian Nama Santri */}

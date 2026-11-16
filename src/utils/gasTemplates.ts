@@ -705,6 +705,7 @@ function handleApiAction_(action, payload, e) {
         ukpList: getDataUKP(),
         usersRoleList: getUsersRole(),
         perizinanList: getPerizinan(),
+        sholatList: getRekapSholat(),
         lastSyncTime: Utilities.formatDate(new Date(), TIMEZONE, 'dd/MM/yyyy HH:mm:ss')
       }, e);
     }
@@ -1625,34 +1626,130 @@ function hapusPerizinan(payload) {
   }
 }
 
+const SHOLAT_SHEET_CANDIDATES_ = [
+  SHEET_SHOLAT,
+  'rekap-sholat',
+  'Rekap Sholat',
+  'Rekap_Keterlambatan_Sholat',
+  'Rekap Keterlambatan Sholat',
+  'keterlambatan_sholat',
+  'Data_Sholat',
+  'Data Sholat',
+  'Absen_Sholat',
+  'sholat'
+];
+
+function detectSholatColumns_(headerRow) {
+  var headers = (headerRow || []).map(function(h) {
+    return String(h || '').trim().toLowerCase();
+  });
+
+  var idxId = 0, idxTgl = 1, idxNis = 2, idxNama = 3, idxKelas = 4, idxGedung = 5, idxKamar = 6;
+  var idxSubuh = 7, idxDzuhur = 8, idxAshar = 9, idxMaghrib = 10, idxIsya = 11;
+  var idxPencatat = 12, idxTs = 13, idxKet = 14;
+
+  var hasRecognizedHeader = headers.some(function(h) {
+    return h.indexOf('nama') !== -1 || h.indexOf('subuh') !== -1 || h.indexOf('tanggal') !== -1;
+  });
+
+  if (hasRecognizedHeader) {
+    idxId = -1; idxTgl = -1; idxNis = -1; idxNama = -1; idxKelas = -1; idxGedung = -1; idxKamar = -1;
+    idxSubuh = -1; idxDzuhur = -1; idxAshar = -1; idxMaghrib = -1; idxIsya = -1;
+    idxPencatat = -1; idxTs = -1; idxKet = -1;
+
+    for (var c = 0; c < headers.length; c++) {
+      var h = headers[c];
+      if (!h) continue;
+      if ((h === 'id' || h.indexOf('id_sholat') !== -1 || h.indexOf('id sholat') !== -1) && idxId === -1) idxId = c;
+      else if ((h === 'tanggal' || h === 'tgl' || h.indexOf('tanggal') !== -1) && idxTgl === -1) idxTgl = c;
+      else if ((h === 'nis' || h.indexOf('id_santri') !== -1) && idxNis === -1) idxNis = c;
+      else if (h.indexOf('nama') !== -1 && idxNama === -1) idxNama = c;
+      else if (h.indexOf('kelas') !== -1 && idxKelas === -1) idxKelas = c;
+      else if ((h.indexOf('gedung') !== -1 || h.indexOf('asrama') !== -1) && idxGedung === -1) idxGedung = c;
+      else if (h.indexOf('kamar') !== -1 && idxKamar === -1) idxKamar = c;
+      else if (h.indexOf('subuh') !== -1 && idxSubuh === -1) idxSubuh = c;
+      else if ((h.indexOf('dzuhur') !== -1 || h.indexOf('zuhur') !== -1) && idxDzuhur === -1) idxDzuhur = c;
+      else if (h.indexOf('ashar') !== -1 && idxAshar === -1) idxAshar = c;
+      else if (h.indexOf('maghrib') !== -1 && idxMaghrib === -1) idxMaghrib = c;
+      else if (h.indexOf('isya') !== -1 && idxIsya === -1) idxIsya = c;
+      else if ((h.indexOf('pencatat') !== -1 || h.indexOf('petugas') !== -1 || h.indexOf('admin') !== -1 || h.indexOf('musyrif') !== -1 || h.indexOf('pelapor') !== -1) && idxPencatat === -1) idxPencatat = c;
+      else if ((h.indexOf('timestamp') !== -1 || h.indexOf('waktu') !== -1) && idxTs === -1) idxTs = c;
+      else if ((h.indexOf('ket') !== -1 || h.indexOf('status') !== -1 || h.indexOf('pemutihan') !== -1) && idxKet === -1) idxKet = c;
+    }
+
+    if (idxId === -1) idxId = 0;
+    if (idxTgl === -1) idxTgl = 1;
+    if (idxNis === -1) idxNis = 2;
+    if (idxNama === -1) idxNama = 3;
+    if (idxKelas === -1) idxKelas = 4;
+    if (idxGedung === -1) idxGedung = 5;
+    if (idxKamar === -1) idxKamar = 6;
+    if (idxSubuh === -1) idxSubuh = 7;
+    if (idxDzuhur === -1) idxDzuhur = 8;
+    if (idxAshar === -1) idxAshar = 9;
+    if (idxMaghrib === -1) idxMaghrib = 10;
+    if (idxIsya === -1) idxIsya = 11;
+    if (idxPencatat === -1) idxPencatat = 12;
+    if (idxTs === -1) idxTs = 13;
+    if (idxKet === -1) idxKet = 14;
+  }
+
+  var maxIdx = Math.max(
+    idxId, idxTgl, idxNis, idxNama, idxKelas, idxGedung, idxKamar,
+    idxSubuh, idxDzuhur, idxAshar, idxMaghrib, idxIsya,
+    idxPencatat, idxTs, idxKet, 14
+  );
+
+  return {
+    idxId: idxId,
+    idxTgl: idxTgl,
+    idxNis: idxNis,
+    idxNama: idxNama,
+    idxKelas: idxKelas,
+    idxGedung: idxGedung,
+    idxKamar: idxKamar,
+    idxSubuh: idxSubuh,
+    idxDzuhur: idxDzuhur,
+    idxAshar: idxAshar,
+    idxMaghrib: idxMaghrib,
+    idxIsya: idxIsya,
+    idxPencatat: idxPencatat,
+    idxTs: idxTs,
+    idxKet: idxKet,
+    colCount: maxIdx + 1
+  };
+}
+
 function getRekapSholat() {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = findSheetSmart_(ss, [SHEET_SHOLAT, 'rekap-sholat', 'Rekap Sholat', 'sholat', 'keterlambatan_sholat']);
+    const sheet = findSheetSmart_(ss, SHOLAT_SHEET_CANDIDATES_);
     if (!sheet || sheet.getLastRow() < 2) return [];
     const maxCol = Math.max(15, sheet.getLastColumn());
-    const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, maxCol).getDisplayValues();
+    const allRows = sheet.getRange(1, 1, sheet.getLastRow(), maxCol).getDisplayValues();
+    const cols = detectSholatColumns_(allRows[0]);
+
     const list = [];
-    for (let i = 0; i < values.length; i++) {
-      const r = values[i];
-      const nama = String(r[3] || '').trim();
+    for (let i = 1; i < allRows.length; i++) {
+      const r = allRows[i];
+      const nama = String(r[cols.idxNama] || '').trim();
       if (!nama) continue;
       list.push({
-        idSholat: String(r[0] || ('SHOLAT-' + (i + 1))).trim(),
-        tanggal: normalizeDateStr_(r[1]),
-        nis: String(r[2] || '').trim(),
+        idSholat: String(r[cols.idxId] || ('SHOLAT-' + i)).trim(),
+        tanggal: normalizeDateStr_(r[cols.idxTgl]),
+        nis: String(r[cols.idxNis] || '').trim(),
         namaSantri: nama,
-        kelas: String(r[4] || '').trim(),
-        gedung: String(r[5] || '').trim(),
-        kamar: String(r[6] || '').trim(),
-        subuh: String(r[7] || 'TEPAT').trim(),
-        dzuhur: String(r[8] || 'TEPAT').trim(),
-        ashar: String(r[9] || 'TEPAT').trim(),
-        maghrib: String(r[10] || 'TEPAT').trim(),
-        isya: String(r[11] || 'TEPAT').trim(),
-        pencatat: String(r[12] || '').trim(),
-        timestamp: String(r[13] || new Date().toISOString()).trim(),
-        keterangan: String(r[14] || 'AKTIF').trim()
+        kelas: String(r[cols.idxKelas] || '').trim(),
+        gedung: String(r[cols.idxGedung] || '').trim(),
+        kamar: String(r[cols.idxKamar] || '').trim(),
+        subuh: String(r[cols.idxSubuh] || 'TEPAT').trim(),
+        dzuhur: String(r[cols.idxDzuhur] || 'TEPAT').trim(),
+        ashar: String(r[cols.idxAshar] || 'TEPAT').trim(),
+        maghrib: String(r[cols.idxMaghrib] || 'TEPAT').trim(),
+        isya: String(r[cols.idxIsya] || 'TEPAT').trim(),
+        pencatat: String(r[cols.idxPencatat] || '').trim(),
+        timestamp: String(r[cols.idxTs] || new Date().toISOString()).trim(),
+        keterangan: String(r[cols.idxKet] || 'AKTIF').trim()
       });
     }
     return list.reverse();
@@ -1666,7 +1763,7 @@ function simpanRekapSholat(payload) {
   lock.waitLock(10000);
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    let sheet = findSheetSmart_(ss, [SHEET_SHOLAT, 'rekap-sholat', 'Rekap Sholat', 'sholat', 'keterlambatan_sholat']);
+    let sheet = findSheetSmart_(ss, SHOLAT_SHEET_CANDIDATES_);
     if (!sheet) {
       sheet = ss.insertSheet(SHEET_SHOLAT);
       sheet.getRange(1, 1, 1, 15).setValues([[
@@ -1676,6 +1773,12 @@ function simpanRekapSholat(payload) {
     } else if (sheet.getLastColumn() < 15) {
       sheet.getRange(1, 15).setValue('Keterangan');
     }
+
+    const headerWidth = Math.max(15, sheet.getLastColumn());
+    const headerRow = sheet.getRange(1, 1, 1, headerWidth).getDisplayValues()[0];
+    const cols = detectSholatColumns_(headerRow);
+    const colWidth = Math.max(headerWidth, cols.colCount);
+
     const idSholat = payload.idSholat || ('SHOLAT-' + Date.now());
     const tanggal = normalizeDateStr_(payload.tanggal || Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd'));
     const nis = payload.nis || '-';
@@ -1694,7 +1797,7 @@ function simpanRekapSholat(payload) {
 
     // Cek apakah santri ini sudah punya baris AKTIF pada tanggal yang sama
     if (sheet.getLastRow() >= 2) {
-      const existingData = sheet.getRange(2, 1, sheet.getLastRow() - 1, 15).getDisplayValues();
+      const existingData = sheet.getRange(2, 1, sheet.getLastRow() - 1, colWidth).getDisplayValues();
       const targetName = cleanPersonName_(namaSantri);
       const unlockedList = Array.isArray(payload.unlockedPrayers) ? payload.unlockedPrayers : [];
       const isUnlocked = function(prayerKey) {
@@ -1703,19 +1806,19 @@ function simpanRekapSholat(payload) {
 
       for (let i = existingData.length - 1; i >= 0; i--) {
         const r = existingData[i];
-        const rId = String(r[0] || '').trim();
-        const rTgl = normalizeDateStr_(r[1]);
-        const rNama = cleanPersonName_(r[3]);
-        const rKet = String(r[14] || 'AKTIF').toUpperCase();
+        const rId = String(r[cols.idxId] || '').trim();
+        const rTgl = normalizeDateStr_(r[cols.idxTgl]);
+        const rNama = cleanPersonName_(r[cols.idxNama]);
+        const rKet = String(r[cols.idxKet] || 'AKTIF').toUpperCase();
         const isPutih = rKet.indexOf('PUTIH') !== -1 || rKet.indexOf('RESET') !== -1;
 
         if (!isPutih && (rId === idSholat || (rTgl === tanggal && rNama === targetName))) {
           const rowNumber = i + 2;
-          const prevSubuh   = String(r[7] || 'TEPAT').trim();
-          const prevDzuhur  = String(r[8] || 'TEPAT').trim();
-          const prevAshar   = String(r[9] || 'TEPAT').trim();
-          const prevMaghrib = String(r[10] || 'TEPAT').trim();
-          const prevIsya    = String(r[11] || 'TEPAT').trim();
+          const prevSubuh   = String(r[cols.idxSubuh] || 'TEPAT').trim();
+          const prevDzuhur  = String(r[cols.idxDzuhur] || 'TEPAT').trim();
+          const prevAshar   = String(r[cols.idxAshar] || 'TEPAT').trim();
+          const prevMaghrib = String(r[cols.idxMaghrib] || 'TEPAT').trim();
+          const prevIsya    = String(r[cols.idxIsya] || 'TEPAT').trim();
 
           const finalSubuh   = (prevSubuh === 'TELAT' && !isUnlocked('subuh')) ? 'TELAT' : subuh;
           const finalDzuhur  = (prevDzuhur === 'TELAT' && !isUnlocked('dzuhur')) ? 'TELAT' : dzuhur;
@@ -1723,7 +1826,7 @@ function simpanRekapSholat(payload) {
           const finalMaghrib = (prevMaghrib === 'TELAT' && !isUnlocked('maghrib')) ? 'TELAT' : maghrib;
           const finalIsya    = (prevIsya === 'TELAT' && !isUnlocked('isya')) ? 'TELAT' : isya;
 
-          const prevPencatat = String(r[12] || '').trim();
+          const prevPencatat = String(r[cols.idxPencatat] || '').trim();
           let finalPencatat = pencatat;
           if (prevPencatat && pencatat) {
             if (prevPencatat.toLowerCase().indexOf(pencatat.toLowerCase()) === -1) {
@@ -1735,11 +1838,25 @@ function simpanRekapSholat(payload) {
             finalPencatat = prevPencatat;
           }
 
-          sheet.getRange(rowNumber, 1, 1, 15).setValues([[
-            rId || idSholat, tanggal, nis, namaSantri, kelas, gedung, kamar,
-            finalSubuh, finalDzuhur, finalAshar, finalMaghrib, finalIsya,
-            finalPencatat, timestamp, r[14] || keterangan
-          ]]);
+          const updatedRow = r.slice();
+          while (updatedRow.length < colWidth) updatedRow.push('');
+          updatedRow[cols.idxId] = rId || idSholat;
+          updatedRow[cols.idxTgl] = tanggal;
+          updatedRow[cols.idxNis] = nis;
+          updatedRow[cols.idxNama] = namaSantri;
+          updatedRow[cols.idxKelas] = kelas;
+          updatedRow[cols.idxGedung] = gedung;
+          updatedRow[cols.idxKamar] = kamar;
+          updatedRow[cols.idxSubuh] = finalSubuh;
+          updatedRow[cols.idxDzuhur] = finalDzuhur;
+          updatedRow[cols.idxAshar] = finalAshar;
+          updatedRow[cols.idxMaghrib] = finalMaghrib;
+          updatedRow[cols.idxIsya] = finalIsya;
+          updatedRow[cols.idxPencatat] = finalPencatat;
+          updatedRow[cols.idxTs] = timestamp;
+          updatedRow[cols.idxKet] = r[cols.idxKet] || keterangan;
+
+          sheet.getRange(rowNumber, 1, 1, colWidth).setValues([updatedRow]);
           return {
             status: 'success',
             updated: true,
@@ -1750,10 +1867,23 @@ function simpanRekapSholat(payload) {
       }
     }
 
-    sheet.appendRow([
-      idSholat, tanggal, nis, namaSantri, kelas, gedung, kamar,
-      subuh, dzuhur, ashar, maghrib, isya, pencatat, timestamp, keterangan
-    ]);
+    const newRow = new Array(colWidth).fill('');
+    newRow[cols.idxId] = idSholat;
+    newRow[cols.idxTgl] = tanggal;
+    newRow[cols.idxNis] = nis;
+    newRow[cols.idxNama] = namaSantri;
+    newRow[cols.idxKelas] = kelas;
+    newRow[cols.idxGedung] = gedung;
+    newRow[cols.idxKamar] = kamar;
+    newRow[cols.idxSubuh] = subuh;
+    newRow[cols.idxDzuhur] = dzuhur;
+    newRow[cols.idxAshar] = ashar;
+    newRow[cols.idxMaghrib] = maghrib;
+    newRow[cols.idxIsya] = isya;
+    newRow[cols.idxPencatat] = pencatat;
+    newRow[cols.idxTs] = timestamp;
+    newRow[cols.idxKet] = keterangan;
+    sheet.appendRow(newRow);
 
     return {
       status: 'success',
@@ -1770,13 +1900,16 @@ function hapusRekapSholat(payload) {
   lock.waitLock(10000);
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = findSheetSmart_(ss, [SHEET_SHOLAT, 'rekap-sholat', 'Rekap Sholat', 'sholat', 'keterlambatan_sholat']);
+    const sheet = findSheetSmart_(ss, SHOLAT_SHEET_CANDIDATES_);
     if (!sheet || sheet.getLastRow() < 2) return { status: 'success', deleted: false };
 
+    const headerWidth = Math.max(15, sheet.getLastColumn());
+    const cols = detectSholatColumns_(sheet.getRange(1, 1, 1, headerWidth).getDisplayValues()[0]);
     const targetId = String(payload.idSholat || '').trim();
-    const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getDisplayValues();
+    const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, cols.colCount).getDisplayValues();
     for (let i = 0; i < values.length; i++) {
-      if (String(values[i][0]).trim() === targetId) {
+      const rId = String(values[i][cols.idxId] || ('SHOLAT-' + (i + 1))).trim();
+      if (rId === targetId) {
         sheet.deleteRow(i + 2);
         return { status: 'success', deleted: true, sholatList: getRekapSholat() };
       }
@@ -1792,13 +1925,15 @@ function resetRekapSholatRange(payload) {
   lock.waitLock(10000);
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = findSheetSmart_(ss, [SHEET_SHOLAT, 'rekap-sholat', 'Rekap Sholat', 'sholat', 'keterlambatan_sholat']);
+    const sheet = findSheetSmart_(ss, SHOLAT_SHEET_CANDIDATES_);
     if (!sheet || sheet.getLastRow() < 2) return { status: 'success', updatedCount: 0 };
 
     if (sheet.getLastColumn() < 15) {
       sheet.getRange(1, 15).setValue('Keterangan');
     }
 
+    const headerWidth = Math.max(15, sheet.getLastColumn());
+    const cols = detectSholatColumns_(sheet.getRange(1, 1, 1, headerWidth).getDisplayValues()[0]);
     const startDate = String(payload.startDate || '').trim();
     const endDate = String(payload.endDate || '').trim();
     const ketBaru = String(
@@ -1806,17 +1941,17 @@ function resetRekapSholatRange(payload) {
         ('DIPUTIHKAN (' + Utilities.formatDate(new Date(), TIMEZONE, 'dd/MM/yyyy HH:mm') + ')')
     ).trim();
 
-    const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 15).getValues();
+    const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, cols.colCount).getValues();
     let updatedCount = 0;
     for (let i = 0; i < data.length; i++) {
       const row = data[i];
-      const tgl = normalizeDateStr_(row[1]);
+      const tgl = normalizeDateStr_(row[cols.idxTgl]);
       let match = true;
       if (startDate && tgl < startDate) match = false;
       if (endDate && tgl > endDate) match = false;
 
       if (match || (!startDate && !endDate)) {
-        sheet.getRange(i + 2, 15).setValue(ketBaru);
+        sheet.getRange(i + 2, cols.idxKet + 1).setValue(ketBaru);
         updatedCount++;
       }
     }

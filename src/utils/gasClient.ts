@@ -528,6 +528,8 @@ export async function fetchAllSheetsFromGas(
 
   let lastError: Error | null = null;
 
+  let parsedData: GasAllDataResponse | null = null;
+
   // Lapis 1: Standard GET Fetch (?action=getAllData)
   try {
     const separator = baseUrl.includes('?') ? '&' : '?';
@@ -545,58 +547,90 @@ export async function fetchAllSheetsFromGas(
           data.message || 'Terjadi kesalahan pada script Google Sheets.'
         );
       }
-      return normalizeAllDataResponse(data);
+      parsedData = data;
     }
   } catch (err) {
     lastError = err instanceof Error ? err : new Error(String(err));
   }
 
   // Lapis 2: POST Fetch (text/plain tanpa CORS preflight)
-  try {
-    const response = await fetch(baseUrl, {
-      method: 'POST',
-      redirect: 'follow',
-      credentials: 'omit',
-      headers: {
-        'Content-Type': 'text/plain;charset=utf-8',
-      },
-      body: JSON.stringify({ action: 'getAllData' }),
-    });
-    if (response.ok) {
-      const rawText = await response.text();
-      const data = parseJsonOrExplainHtml<GasAllDataResponse>(rawText);
+  if (!parsedData) {
+    try {
+      const response = await fetch(baseUrl, {
+        method: 'POST',
+        redirect: 'follow',
+        credentials: 'omit',
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8',
+        },
+        body: JSON.stringify({ action: 'getAllData' }),
+      });
+      if (response.ok) {
+        const rawText = await response.text();
+        const data = parseJsonOrExplainHtml<GasAllDataResponse>(rawText);
+        if (data.status === 'error') {
+          throw new Error(
+            data.message || 'Terjadi kesalahan pada script Google Sheets.'
+          );
+        }
+        parsedData = data;
+      }
+    } catch (err) {
+      if (!lastError) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+      }
+    }
+  }
+
+  // Lapis 3: JSONP Fallback (<script src="...?action=getAllData&callback=...">)
+  if (!parsedData) {
+    try {
+      const data = await requestGasViaJsonp<GasAllDataResponse>(baseUrl, {
+        action: 'getAllData',
+      });
       if (data.status === 'error') {
         throw new Error(
           data.message || 'Terjadi kesalahan pada script Google Sheets.'
         );
       }
-      return normalizeAllDataResponse(data);
-    }
-  } catch (err) {
-    if (!lastError) {
-      lastError = err instanceof Error ? err : new Error(String(err));
+      parsedData = data;
+    } catch (jsonpErr) {
+      throw (
+        lastError ||
+        (jsonpErr instanceof Error
+          ? jsonpErr
+          : new Error('Gagal menghubungi Web App Google Apps Script.'))
+      );
     }
   }
 
-  // Lapis 3: JSONP Fallback (<script src="...?action=getAllData&callback=...">)
-  try {
-    const data = await requestGasViaJsonp<GasAllDataResponse>(baseUrl, {
-      action: 'getAllData',
-    });
-    if (data.status === 'error') {
-      throw new Error(
-        data.message || 'Terjadi kesalahan pada script Google Sheets.'
+  // Kompatibilitas Code.gs versi sebelumnya: jika getAllData belum mengembalikan sholatList,
+  // coba panggil fallback action=getSyncData yang memicu blok default fallback di Code.gs
+  if (!Array.isArray(parsedData.sholatList)) {
+    try {
+      const separator = baseUrl.includes('?') ? '&' : '?';
+      const fallbackRes = await fetch(
+        `${baseUrl}${separator}action=getSyncData&_t=${Date.now()}`,
+        {
+          method: 'GET',
+          redirect: 'follow',
+          credentials: 'omit',
+        }
       );
+      if (fallbackRes.ok) {
+        const fallbackJson = parseJsonOrExplainHtml<GasAllDataResponse>(
+          await fallbackRes.text()
+        );
+        if (Array.isArray(fallbackJson.sholatList)) {
+          parsedData.sholatList = fallbackJson.sholatList;
+        }
+      }
+    } catch {
+      // Abaikan bila Code.gs belum memiliki sholatList sama sekali
     }
-    return normalizeAllDataResponse(data);
-  } catch (jsonpErr) {
-    throw (
-      lastError ||
-      (jsonpErr instanceof Error
-        ? jsonpErr
-        : new Error('Gagal menghubungi Web App Google Apps Script.'))
-    );
   }
+
+  return normalizeAllDataResponse(parsedData);
 }
 
 /**

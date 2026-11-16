@@ -42,6 +42,9 @@ interface MusyrifRolePortalProps {
   onDateRangeChange: (range: DateRangeFilter) => void;
   lastSyncTime: string | null;
   onQuickSync: () => void;
+  onSyncNow?: () => void;
+  onSilentSync?: () => void;
+  isSyncing?: boolean;
   onSubmitLaporan: (input: LaporanInput) => Promise<{ idLaporan: string }>;
   logoUrl: string;
 }
@@ -59,6 +62,9 @@ export const MusyrifRolePortal: React.FC<MusyrifRolePortalProps> = ({
   onDateRangeChange,
   lastSyncTime,
   onQuickSync,
+  onSyncNow,
+  onSilentSync,
+  isSyncing = false,
   onSubmitLaporan,
   logoUrl,
 }) => {
@@ -437,6 +443,17 @@ export const MusyrifRolePortal: React.FC<MusyrifRolePortalProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {onSyncNow && (
+            <button
+              type="button"
+              onClick={onSyncNow}
+              disabled={isSyncing}
+              className="min-h-[34px] px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span>{isSyncing ? 'Menyinkronkan...' : 'Tarik Data Terbaru'}</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => onSelectMusyrif(null)}
@@ -471,7 +488,10 @@ export const MusyrifRolePortal: React.FC<MusyrifRolePortalProps> = ({
         <button
           type="button"
           data-testid="tab-musyrif-status"
-          onClick={() => setMusyrifNavTab('status')}
+          onClick={() => {
+            setMusyrifNavTab('status');
+            onSilentSync?.();
+          }}
           className={`flex-1 min-h-[42px] px-4 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
             musyrifNavTab === 'status'
               ? 'bg-[#07361D] text-[#F5D000] shadow-xs'
