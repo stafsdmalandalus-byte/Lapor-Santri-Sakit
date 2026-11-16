@@ -1677,7 +1677,7 @@ function simpanRekapSholat(payload) {
       sheet.getRange(1, 15).setValue('Keterangan');
     }
     const idSholat = payload.idSholat || ('SHOLAT-' + Date.now());
-    const tanggal = payload.tanggal || Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
+    const tanggal = normalizeDateStr_(payload.tanggal || Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd'));
     const nis = payload.nis || '-';
     const namaSantri = payload.namaSantri || '';
     const kelas = payload.kelas || '-';
@@ -1691,6 +1691,34 @@ function simpanRekapSholat(payload) {
     const pencatat = payload.pencatat || 'Admin';
     const timestamp = payload.timestamp || new Date().toISOString();
     const keterangan = payload.keterangan || 'AKTIF';
+
+    // Cek apakah santri ini sudah punya baris AKTIF pada tanggal yang sama
+    if (sheet.getLastRow() >= 2) {
+      const existingData = sheet.getRange(2, 1, sheet.getLastRow() - 1, 15).getDisplayValues();
+      const targetName = cleanPersonName_(namaSantri);
+      for (let i = existingData.length - 1; i >= 0; i--) {
+        const r = existingData[i];
+        const rId = String(r[0] || '').trim();
+        const rTgl = normalizeDateStr_(r[1]);
+        const rNama = cleanPersonName_(r[3]);
+        const rKet = String(r[14] || 'AKTIF').toUpperCase();
+        const isPutih = rKet.indexOf('PUTIH') !== -1 || rKet.indexOf('RESET') !== -1;
+
+        if (!isPutih && (rId === idSholat || (rTgl === tanggal && rNama === targetName))) {
+          const rowNumber = i + 2;
+          sheet.getRange(rowNumber, 1, 1, 15).setValues([[
+            rId || idSholat, tanggal, nis, namaSantri, kelas, gedung, kamar,
+            subuh, dzuhur, ashar, maghrib, isya, pencatat, timestamp, r[14] || keterangan
+          ]]);
+          return {
+            status: 'success',
+            updated: true,
+            idSholat: rId || idSholat,
+            sholatList: getRekapSholat()
+          };
+        }
+      }
+    }
 
     sheet.appendRow([
       idSholat, tanggal, nis, namaSantri, kelas, gedung, kamar,

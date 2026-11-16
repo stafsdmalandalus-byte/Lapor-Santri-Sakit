@@ -10,12 +10,17 @@ import {
   Search,
   Plus,
   Trash2,
-  CheckCircle2,
-  Clock,
   RotateCcw,
-  UserCheck,
   ShieldAlert,
   Download,
+  Lock,
+  Unlock,
+  MessageCircle,
+  Copy,
+  Check,
+  ExternalLink,
+  Users,
+  User,
 } from 'lucide-react';
 import {
   type MasterSantri,
@@ -29,9 +34,12 @@ import {
   type SholatRow,
   type SholatStatus,
   type SholatInput,
-  createSholatRow,
+  type SantriSholatSummary,
   filterSholatByDateRange,
   isSholatRowPutih,
+  findExistingSholatRecordForDate,
+  formatRincianSholatTelat,
+  generateSholatWhatsAppReport,
 } from '../utils/sholatEngine';
 
 interface RekapSholatPanelProps {
@@ -39,12 +47,18 @@ interface RekapSholatPanelProps {
   sholatList: SholatRow[];
   onAddSholat: (input: SholatInput) => void;
   onDeleteSholat: (idSholat: string) => void;
-  onResetSholatRange?: (startDate: string, endDate: string, keterangan: string) => void;
+  onResetSholatRange?: (
+    startDate: string,
+    endDate: string,
+    keterangan: string
+  ) => void;
   usersRoleList?: UserRoleRow[];
   dateRange: DateRangeFilter;
   onDateRangeChange: (range: DateRangeFilter) => void;
   activeMusyrifName?: string;
 }
+
+type PrayerKey = 'subuh' | 'dzuhur' | 'ashar' | 'maghrib' | 'isya';
 
 export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
   masterData,
@@ -62,7 +76,9 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
   // Form input state
   const [tanggal, setTanggal] = useState<string>(() => getTodayDateISO());
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [selectedSantri, setSelectedSantri] = useState<MasterSantri | null>(null);
+  const [selectedSantri, setSelectedSantri] = useState<MasterSantri | null>(
+    null
+  );
   const [isDropdownOpen, setIsDropdownOpen] = useState<boolean>(false);
 
   const [subuh, setSubuh] = useState<SholatStatus>('TEPAT');
@@ -71,9 +87,74 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
   const [maghrib, setMaghrib] = useState<SholatStatus>('TEPAT');
   const [isya, setIsya] = useState<SholatStatus>('TEPAT');
 
+  // Status penguncian otomatis dari input sebelumnya di tanggal yang sama
+  const [savedLockedMap, setSavedLockedMap] = useState<
+    Record<PrayerKey, boolean>
+  >({
+    subuh: false,
+    dzuhur: false,
+    ashar: false,
+    maghrib: false,
+    isya: false,
+  });
+
+  // State untuk Generator Rekap WhatsApp
+  const [waMode, setWaMode] = useState<'ALL' | 'SINGLE'>('ALL');
+  const [selectedWaSantri, setSelectedWaSantri] = useState<string>('');
+  const [waPhoneNumber, setWaPhoneNumber] = useState<string>('');
+  const [copiedWa, setCopiedWa] = useState<boolean>(false);
+  const waSectionRef = useRef<HTMLDivElement>(null);
+
   const dropdownRef = useRef<HTMLDivElement>(null);
   const filteredSantri = searchMasterSantri(searchQuery, masterData);
   const datePresets = getDynamicDatePresets();
+
+  // Nama santri aktif yang sedang dipilih/diketik pada form input
+  const currentInputSantriName = useMemo(() => {
+    if (selectedSantri) return selectedSantri.namaSantri;
+    return searchQuery.trim();
+  }, [selectedSantri, searchQuery]);
+
+  // Cek apakah di tanggal tersebut santri ini sudah pernah diinput (dan belum diputihkan)
+  const existingDayRecord = useMemo(() => {
+    if (!currentInputSantriName || !tanggal) return null;
+    return findExistingSholatRecordForDate(
+      sholatList,
+      tanggal,
+      currentInputSantriName
+    );
+  }, [sholatList, tanggal, currentInputSantriName]);
+
+  // Otomatis muat dan kunci status sholat yang sudah tercatat TELAT ketika tanggal atau santri dipilih
+  useEffect(() => {
+    if (existingDayRecord) {
+      setSubuh(existingDayRecord.subuh);
+      setDzuhur(existingDayRecord.dzuhur);
+      setAshar(existingDayRecord.ashar);
+      setMaghrib(existingDayRecord.maghrib);
+      setIsya(existingDayRecord.isya);
+      setSavedLockedMap({
+        subuh: existingDayRecord.subuh === 'TELAT',
+        dzuhur: existingDayRecord.dzuhur === 'TELAT',
+        ashar: existingDayRecord.ashar === 'TELAT',
+        maghrib: existingDayRecord.maghrib === 'TELAT',
+        isya: existingDayRecord.isya === 'TELAT',
+      });
+    } else {
+      setSubuh('TEPAT');
+      setDzuhur('TEPAT');
+      setAshar('TEPAT');
+      setMaghrib('TEPAT');
+      setIsya('TEPAT');
+      setSavedLockedMap({
+        subuh: false,
+        dzuhur: false,
+        ashar: false,
+        maghrib: false,
+        isya: false,
+      });
+    }
+  }, [existingDayRecord]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -94,6 +175,26 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
     setIsDropdownOpen(false);
   };
 
+  // Fungsi klik utama waktu sholat:
+  // Jika masih TEPAT -> ubah menjadi TELAT (dan dikunci otomatis sebagai TELAT).
+  // Jika sudah TELAT -> tetap TELAT (dikunci otomatis agar bila diklik lagi di waktu sholat yang sama tetap TELAT).
+  const handleSelectTelatAndLock = (
+    key: PrayerKey,
+    setter: React.Dispatch<React.SetStateAction<SholatStatus>>
+  ) => {
+    setter('TELAT');
+    setSavedLockedMap((prev) => ({ ...prev, [key]: true }));
+  };
+
+  // Fungsi khusus untuk membuka kunci dan mengubah kembali ke TEPAT
+  const handleUnlockToTepat = (
+    key: PrayerKey,
+    setter: React.Dispatch<React.SetStateAction<SholatStatus>>
+  ) => {
+    setter('TEPAT');
+    setSavedLockedMap((prev) => ({ ...prev, [key]: false }));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedSantri && !searchQuery.trim()) {
@@ -106,13 +207,24 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
       return;
     }
 
-    const nama = selectedSantri ? selectedSantri.namaSantri : searchQuery.trim();
-    const nis = selectedSantri ? selectedSantri.idSantri : '-';
-    const kelas = selectedSantri ? selectedSantri.kelas : '-';
-    const gedung = '-';
-    const kamar = selectedSantri ? selectedSantri.kamar : '-';
+    const nama = selectedSantri
+      ? selectedSantri.namaSantri
+      : existingDayRecord
+      ? existingDayRecord.namaSantri
+      : searchQuery.trim();
+    const nis = selectedSantri
+      ? selectedSantri.idSantri
+      : existingDayRecord?.nis || '-';
+    const kelas = selectedSantri
+      ? selectedSantri.kelas
+      : existingDayRecord?.kelas || '-';
+    const gedung = existingDayRecord?.gedung || '-';
+    const kamar = selectedSantri
+      ? selectedSantri.kamar
+      : existingDayRecord?.kamar || '-';
 
     const input: SholatInput = {
+      idSholat: existingDayRecord?.idSholat,
       tanggal,
       nis,
       namaSantri: nama,
@@ -127,14 +239,22 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
       pencatat: activeMusyrifName,
     };
 
+    const isUpdatingExisting = Boolean(existingDayRecord);
     onAddSholat(input);
 
     await Swal.fire({
       icon: 'success',
-      title: 'Rekap Sholat Disimpan!',
-      text: `Data keterlambatan sholat untuk ${nama} berhasil dicatat dan disinkronkan ke Spreadsheet.`,
+      title: isUpdatingExisting
+        ? 'Rekap Sholat Diperbarui & Dikunci!'
+        : 'Rekap Sholat Disimpan!',
+      html: `<div class="text-xs text-slate-600 space-y-1">
+        <p>Data keterlambatan sholat untuk <b>${nama}</b> pada tanggal <b>${tanggal}</b> berhasil disimpan dan disinkronkan ke Spreadsheet.</p>
+        <p class="font-mono text-[11px] bg-slate-100 p-2 rounded-lg mt-1">
+          Subuh: <b>${subuh}</b> · Dzuhur: <b>${dzuhur}</b> · Ashar: <b>${ashar}</b> · Maghrib: <b>${maghrib}</b> · Isya: <b>${isya}</b>
+        </p>
+      </div>`,
       confirmButtonColor: '#075e54',
-      timer: 1800,
+      timer: 2200,
     });
 
     // Reset form
@@ -145,6 +265,13 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
     setAshar('TEPAT');
     setMaghrib('TEPAT');
     setIsya('TEPAT');
+    setSavedLockedMap({
+      subuh: false,
+      dzuhur: false,
+      ashar: false,
+      maghrib: false,
+      isya: false,
+    });
     setSubTab('rekap');
   };
 
@@ -153,7 +280,8 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
     () => dateFilteredList.filter((r) => !isSholatRowPutih(r)),
     [dateFilteredList]
   );
-  const diputihkanCount = dateFilteredList.length - activeDateFilteredList.length;
+  const diputihkanCount =
+    dateFilteredList.length - activeDateFilteredList.length;
   const isDateFiltered =
     dateRange.startDate.trim() !== '' || dateRange.endDate.trim() !== '';
 
@@ -178,26 +306,13 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
       ashar: asharTelat,
       maghrib: maghribTelat,
       isya: isyaTelat,
-      total: subuhTelat + dzuhurTelat + asharTelat + maghribTelat + isyaTelat,
+      total:
+        subuhTelat + dzuhurTelat + asharTelat + maghribTelat + isyaTelat,
     };
   }, [activeDateFilteredList]);
 
-  const santriSummaryList = useMemo(() => {
-    const map = new Map<
-      string,
-      {
-        namaSantri: string;
-        kelas: string;
-        kamar: string;
-        subuhTelat: number;
-        dzuhurTelat: number;
-        asharTelat: number;
-        maghribTelat: number;
-        isyaTelat: number;
-        totalTelat: number;
-        diputihkanRecords: number;
-      }
-    >();
+  const santriSummaryList: SantriSholatSummary[] = useMemo(() => {
+    const map = new Map<string, SantriSholatSummary>();
 
     for (const row of dateFilteredList) {
       const key = row.namaSantri.toLowerCase().trim();
@@ -205,7 +320,9 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
       if (!map.has(key)) {
         map.set(key, {
           namaSantri: row.namaSantri,
+          nis: row.nis || '-',
           kelas: row.kelas,
+          gedung: row.gedung || '-',
           kamar: row.kamar,
           subuhTelat: 0,
           dzuhurTelat: 0,
@@ -214,23 +331,48 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
           isyaTelat: 0,
           totalTelat: 0,
           diputihkanRecords: 0,
+          tanggalTelatList: [],
         });
       }
       const item = map.get(key)!;
       if (isPutih) {
         item.diputihkanRecords++;
       } else {
-        if (row.subuh === 'TELAT') item.subuhTelat++;
-        if (row.dzuhur === 'TELAT') item.dzuhurTelat++;
-        if (row.ashar === 'TELAT') item.asharTelat++;
-        if (row.maghrib === 'TELAT') item.maghribTelat++;
-        if (row.isya === 'TELAT') item.isyaTelat++;
+        let hasTelatOnRow = false;
+        if (row.subuh === 'TELAT') {
+          item.subuhTelat++;
+          hasTelatOnRow = true;
+        }
+        if (row.dzuhur === 'TELAT') {
+          item.dzuhurTelat++;
+          hasTelatOnRow = true;
+        }
+        if (row.ashar === 'TELAT') {
+          item.asharTelat++;
+          hasTelatOnRow = true;
+        }
+        if (row.maghrib === 'TELAT') {
+          item.maghribTelat++;
+          hasTelatOnRow = true;
+        }
+        if (row.isya === 'TELAT') {
+          item.isyaTelat++;
+          hasTelatOnRow = true;
+        }
         item.totalTelat =
           item.subuhTelat +
           item.dzuhurTelat +
           item.asharTelat +
           item.maghribTelat +
           item.isyaTelat;
+
+        if (
+          hasTelatOnRow &&
+          row.tanggal &&
+          !item.tanggalTelatList.includes(row.tanggal)
+        ) {
+          item.tanggalTelatList.push(row.tanggal);
+        }
       }
     }
 
@@ -238,6 +380,66 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
       (a, b) => b.totalTelat - a.totalTelat
     );
   }, [dateFilteredList]);
+
+  // Pastikan pilihan santri WA otomatis terisi bila mode SINGLE dipilih
+  useEffect(() => {
+    if (
+      waMode === 'SINGLE' &&
+      !selectedWaSantri &&
+      santriSummaryList.length > 0
+    ) {
+      setSelectedWaSantri(santriSummaryList[0].namaSantri);
+    }
+  }, [waMode, selectedWaSantri, santriSummaryList]);
+
+  const waReportText = useMemo(() => {
+    return generateSholatWhatsAppReport({
+      summaries: santriSummaryList,
+      startDate: dateRange.startDate,
+      endDate: dateRange.endDate,
+      mode: waMode,
+      selectedSantriName: selectedWaSantri,
+    });
+  }, [santriSummaryList, dateRange.startDate, dateRange.endDate, waMode, selectedWaSantri]);
+
+  const waLinkUrl = useMemo(() => {
+    const cleanPhone = waPhoneNumber.replace(/\D/g, '');
+    const normalizedPhone = cleanPhone.startsWith('0')
+      ? '62' + cleanPhone.slice(1)
+      : cleanPhone;
+    const encoded = encodeURIComponent(waReportText);
+    return normalizedPhone
+      ? `https://wa.me/${normalizedPhone}?text=${encoded}`
+      : `https://wa.me/?text=${encoded}`;
+  }, [waPhoneNumber, waReportText]);
+
+  const handleCopyWaText = async () => {
+    try {
+      await navigator.clipboard.writeText(waReportText);
+      setCopiedWa(true);
+      setTimeout(() => setCopiedWa(false), 2500);
+      await Swal.fire({
+        icon: 'success',
+        title: 'Format Rekap WA Disalin!',
+        html: `<div class="text-left text-xs text-slate-600 space-y-2">
+          <p>Rekap keterlambatan sholat siap ditempelkan ke WhatsApp:</p>
+          <pre class="bg-slate-100 p-3 rounded-xl font-mono text-[11px] whitespace-pre-wrap max-h-52 overflow-y-auto">${waReportText}</pre>
+        </div>`,
+        confirmButtonColor: '#075e54',
+        confirmButtonText: 'Selesai',
+      });
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleQuickWaForSantri = (namaSantri: string) => {
+    setWaMode('SINGLE');
+    setSelectedWaSantri(namaSantri);
+    if (waSectionRef.current) {
+      waSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
 
   const handleDownloadSholatCsv = async () => {
     const headers = [
@@ -251,6 +453,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
       'Maghrib Telat (Aktif)',
       'Isya Telat (Aktif)',
       'Total Keterlambatan Aktif',
+      'Rincian Sholat Telat',
       'Catatan Diputihkan',
     ];
     const rows = santriSummaryList.map((st, idx) => [
@@ -264,16 +467,24 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
       st.maghribTelat,
       st.isyaTelat,
       st.totalTelat,
-      st.diputihkanRecords > 0 ? `"DIPUTIHKAN (${st.diputihkanRecords} hari)"` : '"AKTIF"',
+      `"${formatRincianSholatTelat(st)}"`,
+      st.diputihkanRecords > 0
+        ? `"DIPUTIHKAN (${st.diputihkanRecords} hari)"`
+        : '"AKTIF"',
     ]);
 
-    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const csvContent = [
+      headers.join(','),
+      ...rows.map((r) => r.join(',')),
+    ].join('\n');
     const csvWithBom = '\uFEFF' + csvContent;
     const blob = new Blob([csvWithBom], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `Akumulasi_Keterlambatan_Sholat_${dateRange.startDate || 'Semua'}_sd_${dateRange.endDate || 'Semua'}.csv`;
+    link.download = `Akumulasi_Keterlambatan_Sholat_${
+      dateRange.startDate || 'Semua'
+    }_sd_${dateRange.endDate || 'Semua'}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -340,7 +551,11 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
     const keteranganPemutihan = `DIPUTIHKAN (${nowFormatted} oleh ${activeMusyrifName})`;
 
     if (onResetSholatRange) {
-      onResetSholatRange(dateRange.startDate, dateRange.endDate, keteranganPemutihan);
+      onResetSholatRange(
+        dateRange.startDate,
+        dateRange.endDate,
+        keteranganPemutihan
+      );
     }
 
     await Swal.fire({
@@ -383,6 +598,56 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
     }
   };
 
+  const prayerItems: Array<{
+    key: PrayerKey;
+    label: string;
+    icon: string;
+    value: SholatStatus;
+    setter: React.Dispatch<React.SetStateAction<SholatStatus>>;
+    wasSavedTelat: boolean;
+  }> = [
+    {
+      key: 'subuh',
+      label: 'Subuh',
+      icon: '🌅',
+      value: subuh,
+      setter: setSubuh,
+      wasSavedTelat: existingDayRecord?.subuh === 'TELAT',
+    },
+    {
+      key: 'dzuhur',
+      label: 'Dzuhur',
+      icon: '☀️',
+      value: dzuhur,
+      setter: setDzuhur,
+      wasSavedTelat: existingDayRecord?.dzuhur === 'TELAT',
+    },
+    {
+      key: 'ashar',
+      label: 'Ashar',
+      icon: '🌤️',
+      value: ashar,
+      setter: setAshar,
+      wasSavedTelat: existingDayRecord?.ashar === 'TELAT',
+    },
+    {
+      key: 'maghrib',
+      label: 'Maghrib',
+      icon: '🌆',
+      value: maghrib,
+      setter: setMaghrib,
+      wasSavedTelat: existingDayRecord?.maghrib === 'TELAT',
+    },
+    {
+      key: 'isya',
+      label: 'Isya',
+      icon: '🌙',
+      value: isya,
+      setter: setIsya,
+      wasSavedTelat: existingDayRecord?.isya === 'TELAT',
+    },
+  ];
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Header Banner */}
@@ -395,7 +660,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
             </h2>
           </div>
           <p className="text-xs text-emerald-100 mt-1">
-            Khusus Admin Pengasuhan · Pantauan kedisiplinan sholat berjamaah harian
+            Penguncian Otomatis Harian · Rekap WhatsApp Per Anak &amp; Keseluruhan · Sinkron Spreadsheet
           </p>
         </div>
 
@@ -421,20 +686,20 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                 : 'text-white hover:bg-white/10'
             }`}
           >
-            📋 Data Rekap ({dateFilteredList.length})
+            📋 Data Rekap &amp; WA ({dateFilteredList.length})
           </button>
         </div>
       </div>
 
       {subTab === 'input' ? (
-        /* TAB 1: FORM INPUT KETERLAMBATAN SHOLAT (WhatsApp Chat Style) */
+        /* TAB 1: FORM INPUT KETERLAMBATAN SHOLAT (Dengan Penguncian Otomatis) */
         <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/90 space-y-5">
           <div className="border-b border-slate-100 pb-3">
             <h3 className="text-sm font-bold text-slate-800">
               Formulir Input Keterlambatan Sholat Santri
             </h3>
             <p className="text-xs text-slate-500">
-              Cari nama santri dan tentukan status kehadiran di 5 waktu sholat.
+              Pilih tanggal dan nama santri. Jika di tanggal yang sama santri sudah tercatat <strong>TELAT</strong> pada waktu sholat sebelumnya, statusnya otomatis tertulis <strong>TELAT (Terkunci)</strong> agar tidak berubah saat input waktu sholat berikutnya, namun tetap bisa diubah ke <strong>TEPAT</strong>.
             </p>
           </div>
 
@@ -488,24 +753,40 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
 
               {isDropdownOpen && filteredSantri.length > 0 && (
                 <div className="absolute z-20 left-0 right-0 mt-1 max-h-56 overflow-y-auto bg-white rounded-2xl shadow-xl border border-slate-200 p-1 space-y-1">
-                  {filteredSantri.map((santri) => (
-                    <button
-                      key={santri.idSantri || santri.namaSantri}
-                      type="button"
-                      onClick={() => handleSelectSantri(santri)}
-                      className="w-full text-left px-3 py-2 rounded-xl hover:bg-emerald-50 transition text-xs flex items-center justify-between cursor-pointer"
-                    >
-                      <div>
-                        <p className="font-bold text-slate-900">{santri.namaSantri}</p>
-                        <p className="text-[10px] text-slate-500">
-                          Kelas {santri.kelas} · Kamar {santri.kamar}
-                        </p>
-                      </div>
-                      <span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md">
-                        ID: {santri.idSantri}
-                      </span>
-                    </button>
-                  ))}
+                  {filteredSantri.map((santri) => {
+                    const existingForItem = findExistingSholatRecordForDate(
+                      sholatList,
+                      tanggal,
+                      santri.namaSantri
+                    );
+                    return (
+                      <button
+                        key={santri.idSantri || santri.namaSantri}
+                        type="button"
+                        onClick={() => handleSelectSantri(santri)}
+                        className="w-full text-left px-3 py-2 rounded-xl hover:bg-emerald-50 transition text-xs flex items-center justify-between cursor-pointer"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="font-bold text-slate-900">
+                              {santri.namaSantri}
+                            </p>
+                            {existingForItem && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold">
+                                🔒 Sudah Ada Input Tgl {tanggal}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-slate-500">
+                            Kelas {santri.kelas} · Kamar {santri.kamar}
+                          </p>
+                        </div>
+                        <span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md">
+                          ID: {santri.idSantri}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
 
@@ -516,7 +797,8 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                       Terpilih: {selectedSantri.namaSantri}
                     </p>
                     <p className="text-[11px] text-emerald-700">
-                      Kelas {selectedSantri.kelas} · Kamar {selectedSantri.kamar}
+                      Kelas {selectedSantri.kelas} · Asrama/Kamar{' '}
+                      {selectedSantri.kamar}
                     </p>
                   </div>
                   <button
@@ -527,113 +809,115 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                     }}
                     className="text-xs font-semibold text-emerald-800 hover:text-emerald-950 underline cursor-pointer"
                   >
-                    Ganti
+                    Ganti Santri
                   </button>
                 </div>
               )}
             </div>
 
-            {/* Status 5 Waktu Sholat (Quick 1-Tap Toggle for Admin) */}
+            {/* Banner Informasi Penguncian Otomatis jika di tanggal yang sama sudah ada data */}
+            {existingDayRecord && (
+              <div className="rounded-2xl bg-amber-50 border border-amber-200/90 p-3.5 text-xs text-amber-950 flex items-start gap-2.5">
+                <Lock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <p className="font-bold">
+                    Data {existingDayRecord.namaSantri} pada Tanggal {tanggal} Ditemukan (Otomatis Terkunci)
+                  </p>
+                  <p className="text-[11px] text-amber-800 leading-relaxed">
+                    Waktu sholat yang sebelumnya sudah diinput <strong>TELAT</strong> pada tanggal ini otomatis tertulis <strong>TELAT &amp; Terkunci</strong> agar tetap <strong>TELAT</strong> saat Anda menginput waktu sholat lainnya. Jika ingin mengoreksi ke <strong>TEPAT</strong>, klik tombol <strong>&ldquo;Ubah ke Tepat&rdquo;</strong> di bawah waktu sholat terkait.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Status 5 Waktu Sholat (Dengan Sistem Penguncian Otomatis) */}
             <div className="rounded-2xl bg-stone-50 border border-slate-200/80 p-4 space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-bold text-slate-800">
-                  Status Sholat 5 Waktu (Klik untuk Ubah ke Telat):
+                  Status Sholat 5 Waktu (Klik untuk Tandai Telat &amp; Kunci Otomatis):
                 </p>
                 <span className="text-[10px] text-slate-500">
-                  Default: Tepat Waktu
+                  Status TELAT otomatis terkunci · Klik &ldquo;Ubah ke Tepat&rdquo; untuk membuka
                 </span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
-                {/* Subuh */}
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                    🌅 Subuh
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setSubuh(subuh === 'TELAT' ? 'TEPAT' : 'TELAT')}
-                    className={`w-full min-h-[42px] px-3 py-2 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
-                      subuh === 'TELAT'
-                        ? 'bg-rose-600 text-white border-rose-700 shadow-xs'
-                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
-                    }`}
-                  >
-                    <span>{subuh === 'TELAT' ? '⚠️ Telat' : '✅ Tepat'}</span>
-                  </button>
-                </div>
+                {prayerItems.map((item) => {
+                  const isTelat = item.value === 'TELAT';
+                  const isLocked = savedLockedMap[item.key] || isTelat;
 
-                {/* Dzuhur */}
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                    ☀️ Dzuhur
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setDzuhur(dzuhur === 'TELAT' ? 'TEPAT' : 'TELAT')}
-                    className={`w-full min-h-[42px] px-3 py-2 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
-                      dzuhur === 'TELAT'
-                        ? 'bg-rose-600 text-white border-rose-700 shadow-xs'
-                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
-                    }`}
-                  >
-                    <span>{dzuhur === 'TELAT' ? '⚠️ Telat' : '✅ Tepat'}</span>
-                  </button>
-                </div>
+                  return (
+                    <div
+                      key={item.key}
+                      className={`rounded-2xl p-2.5 border transition flex flex-col justify-between gap-2 ${
+                        isTelat
+                          ? 'bg-rose-50/70 border-rose-300 shadow-xs'
+                          : 'bg-white border-slate-200/90'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-bold text-slate-800">
+                          {item.icon} {item.label}
+                        </label>
+                        {item.wasSavedTelat && isTelat && (
+                          <span
+                            className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300"
+                            title="Sudah tercatat TELAT sebelumnya di tanggal ini"
+                          >
+                            <Lock className="w-2.5 h-2.5" />
+                            <span>Tersimpan</span>
+                          </span>
+                        )}
+                      </div>
 
-                {/* Ashar */}
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                    🌤️ Ashar
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setAshar(ashar === 'TELAT' ? 'TEPAT' : 'TELAT')}
-                    className={`w-full min-h-[42px] px-3 py-2 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
-                      ashar === 'TELAT'
-                        ? 'bg-rose-600 text-white border-rose-700 shadow-xs'
-                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
-                    }`}
-                  >
-                    <span>{ashar === 'TELAT' ? '⚠️ Telat' : '✅ Tepat'}</span>
-                  </button>
-                </div>
+                      {/* Tombol Utama: Jika diklik saat TEPAT -> jadi TELAT (Terkunci). Jika diklik saat sudah TELAT -> tetap TELAT (Terkunci) */}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleSelectTelatAndLock(item.key, item.setter)
+                        }
+                        className={`w-full min-h-[42px] px-3 py-2 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                          isTelat
+                            ? 'bg-rose-600 text-white border-rose-700 shadow-xs'
+                            : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
+                        }`}
+                      >
+                        {isTelat ? (
+                          <>
+                            <Lock className="w-3.5 h-3.5 shrink-0" />
+                            <span>TELAT (Terkunci)</span>
+                          </>
+                        ) : (
+                          <span>✅ Tepat Waktu</span>
+                        )}
+                      </button>
 
-                {/* Maghrib */}
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                    🌆 Maghrib
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setMaghrib(maghrib === 'TELAT' ? 'TEPAT' : 'TELAT')}
-                    className={`w-full min-h-[42px] px-3 py-2 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
-                      maghrib === 'TELAT'
-                        ? 'bg-rose-600 text-white border-rose-700 shadow-xs'
-                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
-                    }`}
-                  >
-                    <span>{maghrib === 'TELAT' ? '⚠️ Telat' : '✅ Tepat'}</span>
-                  </button>
-                </div>
-
-                {/* Isya */}
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                    🌙 Isya
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setIsya(isya === 'TELAT' ? 'TEPAT' : 'TELAT')}
-                    className={`w-full min-h-[42px] px-3 py-2 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
-                      isya === 'TELAT'
-                        ? 'bg-rose-600 text-white border-rose-700 shadow-xs'
-                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
-                    }`}
-                  >
-                    <span>{isya === 'TELAT' ? '⚠️ Telat' : '✅ Tepat'}</span>
-                  </button>
-                </div>
+                      {/* Tombol Ubah ke Tepat (Hanya muncul saat status TELAT / Terkunci) */}
+                      {isTelat && isLocked ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleUnlockToTepat(item.key, item.setter)
+                          }
+                          className="w-full py-1.5 px-2 rounded-lg bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 text-[10px] font-bold transition flex items-center justify-center gap-1 cursor-pointer"
+                        >
+                          <Unlock className="w-3 h-3 shrink-0" />
+                          <span>Ubah ke Tepat</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleSelectTelatAndLock(item.key, item.setter)
+                          }
+                          className="w-full py-1.5 px-2 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-semibold transition flex items-center justify-center gap-1 cursor-pointer"
+                        >
+                          <span>⚠️ Tandai Telat</span>
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -642,23 +926,27 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
               className="w-full min-h-[44px] rounded-xl bg-[#075e54] hover:bg-[#054c42] text-white text-xs font-bold transition flex items-center justify-center gap-2 shadow-sm cursor-pointer"
             >
               <Plus className="w-4 h-4" />
-              <span>Simpan Rekap Sholat Santri</span>
+              <span>
+                {existingDayRecord
+                  ? `Simpan Perubahan & Kunci Rekap (${existingDayRecord.namaSantri})`
+                  : 'Simpan Rekap Sholat Santri'}
+              </span>
             </button>
           </form>
         </div>
       ) : (
-        /* TAB 2: DATA REKAP & FILTER RENTANG TANGGAL */
-        <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/90 space-y-4">
+        /* TAB 2: DATA REKAP, FILTER RENTANG TANGGAL & KIRIM REKAP WA */
+        <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/90 space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
             <div>
               <h3 className="text-sm font-bold text-slate-800">
                 Data Rekap Keterlambatan Sholat ({dateFilteredList.length} Catatan)
               </h3>
               <p className="text-xs text-slate-500">
-                Daftar kedisiplinan sholat santri berdasarkan rentang tanggal
+                Daftar kedisiplinan sholat santri, ekspor laporan WhatsApp per anak/keseluruhan, dan pemutihan
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={handleResetPemutihan}
@@ -683,12 +971,14 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
                 <CalendarRange className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-                <span>Filter Rentang Tanggal</span>
+                <span>Filter Rentang Tanggal (Dari Tanggal s/d Sampai Tanggal)</span>
               </div>
               {isDateFiltered && (
                 <button
                   type="button"
-                  onClick={() => onDateRangeChange({ startDate: '', endDate: '' })}
+                  onClick={() =>
+                    onDateRangeChange({ startDate: '', endDate: '' })
+                  }
                   className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 flex items-center gap-1 cursor-pointer"
                 >
                   <RotateCcw className="w-3 h-3" />
@@ -733,7 +1023,10 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                   type="date"
                   value={dateRange.startDate}
                   onChange={(e) =>
-                    onDateRangeChange({ ...dateRange, startDate: e.target.value })
+                    onDateRangeChange({
+                      ...dateRange,
+                      startDate: e.target.value,
+                    })
                   }
                   className="w-full rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono tabular-nums text-slate-800"
                 />
@@ -746,7 +1039,10 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                   type="date"
                   value={dateRange.endDate}
                   onChange={(e) =>
-                    onDateRangeChange({ ...dateRange, endDate: e.target.value })
+                    onDateRangeChange({
+                      ...dateRange,
+                      endDate: e.target.value,
+                    })
                   }
                   className="w-full rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono tabular-nums text-slate-800"
                 />
@@ -758,27 +1054,176 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
           <div className="grid grid-cols-2 sm:grid-cols-6 gap-2.5">
             <div className="bg-gradient-to-br from-rose-900 to-rose-950 text-white rounded-2xl p-3 text-center shadow-xs border border-rose-800">
               <p className="text-[10px] text-rose-200 font-medium">🌅 Subuh</p>
-              <p className="text-xl font-mono font-bold text-white mt-0.5">{sholatStats.subuh}</p>
+              <p className="text-xl font-mono font-bold text-white mt-0.5">
+                {sholatStats.subuh}
+              </p>
             </div>
             <div className="bg-gradient-to-br from-rose-900 to-rose-950 text-white rounded-2xl p-3 text-center shadow-xs border border-rose-800">
               <p className="text-[10px] text-rose-200 font-medium">☀️ Dzuhur</p>
-              <p className="text-xl font-mono font-bold text-white mt-0.5">{sholatStats.dzuhur}</p>
+              <p className="text-xl font-mono font-bold text-white mt-0.5">
+                {sholatStats.dzuhur}
+              </p>
             </div>
             <div className="bg-gradient-to-br from-rose-900 to-rose-950 text-white rounded-2xl p-3 text-center shadow-xs border border-rose-800">
               <p className="text-[10px] text-rose-200 font-medium">🌤️ Ashar</p>
-              <p className="text-xl font-mono font-bold text-white mt-0.5">{sholatStats.ashar}</p>
+              <p className="text-xl font-mono font-bold text-white mt-0.5">
+                {sholatStats.ashar}
+              </p>
             </div>
             <div className="bg-gradient-to-br from-rose-900 to-rose-950 text-white rounded-2xl p-3 text-center shadow-xs border border-rose-800">
-              <p className="text-[10px] text-rose-200 font-medium">🌆 Maghrib</p>
-              <p className="text-xl font-mono font-bold text-white mt-0.5">{sholatStats.maghrib}</p>
+              <p className="text-[10px] text-rose-200 font-medium">
+                🌆 Maghrib
+              </p>
+              <p className="text-xl font-mono font-bold text-white mt-0.5">
+                {sholatStats.maghrib}
+              </p>
             </div>
             <div className="bg-gradient-to-br from-rose-900 to-rose-950 text-white rounded-2xl p-3 text-center shadow-xs border border-rose-800">
               <p className="text-[10px] text-rose-200 font-medium">🌙 Isya</p>
-              <p className="text-xl font-mono font-bold text-white mt-0.5">{sholatStats.isya}</p>
+              <p className="text-xl font-mono font-bold text-white mt-0.5">
+                {sholatStats.isya}
+              </p>
             </div>
             <div className="bg-gradient-to-br from-slate-900 to-slate-950 text-white rounded-2xl p-3 text-center shadow-xs border border-slate-700">
-              <p className="text-[10px] text-emerald-400 font-medium">📊 Total Telat</p>
-              <p className="text-xl font-mono font-bold text-emerald-300 mt-0.5">{sholatStats.total}</p>
+              <p className="text-[10px] text-emerald-400 font-medium">
+                📊 Total Telat
+              </p>
+              <p className="text-xl font-mono font-bold text-emerald-300 mt-0.5">
+                {sholatStats.total}
+              </p>
+            </div>
+          </div>
+
+          {/* PANEL KIRIM REKAPAN KETERLAMBATAN SHOLAT KE WHATSAPP (Per Anak & Keseluruhan Anak) */}
+          <div
+            ref={waSectionRef}
+            className="rounded-2xl bg-emerald-50/70 border border-emerald-200 p-4 space-y-3.5"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-emerald-200/70">
+              <div>
+                <h4 className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                  <MessageCircle className="w-4 h-4 text-[#075e54]" />
+                  <span>
+                    Kirim Rekapan Keterlambatan Sholat ke WhatsApp (Per Anak &amp; Keseluruhan)
+                  </span>
+                </h4>
+                <p className="text-[11px] text-emerald-800 mt-0.5">
+                  Memuat rentang tanggal, Nama, Kelas, Asrama/Kamar, Total Keseluruhan Telat, dan Rincian Sholat yang Telat beserta jumlahnya.
+                </p>
+              </div>
+
+              {/* Pilihan Mode: Keseluruhan Anak vs Per Anak */}
+              <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-emerald-200">
+                <button
+                  type="button"
+                  onClick={() => setWaMode('ALL')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                    waMode === 'ALL'
+                      ? 'bg-[#075e54] text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Keseluruhan Anak ({santriSummaryList.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWaMode('SINGLE')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                    waMode === 'SINGLE'
+                      ? 'bg-[#075e54] text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <User className="w-3.5 h-3.5" />
+                  <span>Per Anak</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {waMode === 'SINGLE' && (
+                <div>
+                  <label className="block text-[11px] font-semibold text-emerald-950 mb-1">
+                    Pilih Nama Santri (Rekap Per Anak)
+                  </label>
+                  <select
+                    value={selectedWaSantri}
+                    onChange={(e) => setSelectedWaSantri(e.target.value)}
+                    className="w-full rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:border-[#075e54] focus:outline-none"
+                  >
+                    {santriSummaryList.length === 0 ? (
+                      <option value="">-- Belum ada santri di rentang ini --</option>
+                    ) : (
+                      santriSummaryList.map((st) => (
+                        <option key={st.namaSantri} value={st.namaSantri}>
+                          {st.namaSantri} ({st.kelas} · {st.kamar}) — Total Telat: {st.totalTelat}x
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+              )}
+
+              <div className={waMode === 'ALL' ? 'sm:col-span-2' : ''}>
+                <label className="block text-[11px] font-semibold text-emerald-950 mb-1">
+                  Nomor WhatsApp Tujuan (Opsional — Kosongkan bila pilih grup/kontak di WA)
+                </label>
+                <input
+                  type="tel"
+                  value={waPhoneNumber}
+                  onChange={(e) => setWaPhoneNumber(e.target.value)}
+                  placeholder="Contoh: 081234567890 atau kosongkan..."
+                  className="w-full rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-mono text-slate-800 focus:border-[#075e54] focus:outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Preview Format Teks WA */}
+            <div className="bg-white rounded-xl border border-emerald-200/90 p-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">
+                  Preview Pesan WhatsApp ({waMode === 'ALL' ? 'Keseluruhan Anak' : `Per Anak: ${selectedWaSantri || '-'}`}):
+                </span>
+              </div>
+              <pre className="text-[11px] font-mono text-slate-800 whitespace-pre-wrap leading-relaxed max-h-56 overflow-y-auto bg-slate-50 p-3 rounded-lg border border-slate-200/70">
+                {waReportText}
+              </pre>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              <a
+                href={waLinkUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 min-w-[200px] min-h-[40px] px-4 py-2 rounded-xl bg-[#075e54] hover:bg-[#054c42] text-white text-xs font-bold transition flex items-center justify-center gap-2 shadow-xs"
+              >
+                <MessageCircle className="w-4 h-4" />
+                <span>
+                  {waMode === 'ALL'
+                    ? 'Kirim Rekap Keseluruhan ke WhatsApp'
+                    : `Kirim Rekap ${selectedWaSantri || 'Santri'} ke WhatsApp`}
+                </span>
+                <ExternalLink className="w-3.5 h-3.5 opacity-80" />
+              </a>
+
+              <button
+                type="button"
+                onClick={handleCopyWaText}
+                className="min-h-[40px] px-4 py-2 rounded-xl bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                {copiedWa ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-700" />
+                    <span>Tersalin!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4 text-emerald-700" />
+                    <span>Salin Teks WA</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
 
@@ -806,41 +1251,95 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                   <thead>
                     <tr className="bg-slate-200/70 text-slate-700 font-bold border-b border-slate-300">
                       <th className="p-2.5 rounded-l-xl">No</th>
-                      <th className="p-2.5">Nama Santri</th>
+                      <th className="p-2.5">Nama, Kelas &amp; Asrama</th>
                       <th className="p-2.5 text-center">Subuh</th>
                       <th className="p-2.5 text-center">Dzuhur</th>
                       <th className="p-2.5 text-center">Ashar</th>
                       <th className="p-2.5 text-center">Maghrib</th>
                       <th className="p-2.5 text-center">Isya</th>
                       <th className="p-2.5 text-center">Total Telat</th>
-                      <th className="p-2.5 text-center rounded-r-xl">Keterangan Spreadsheet</th>
+                      <th className="p-2.5">Rincian Sholat Telat</th>
+                      <th className="p-2.5 text-center">Status</th>
+                      <th className="p-2.5 text-center rounded-r-xl">Rekap WA</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200/60 font-mono text-[11px]">
                     {santriSummaryList.map((st, idx) => (
-                      <tr key={st.namaSantri} className="hover:bg-white transition">
-                        <td className="p-2.5 font-bold text-slate-500">{idx + 1}</td>
+                      <tr
+                        key={st.namaSantri}
+                        className="hover:bg-white transition"
+                      >
+                        <td className="p-2.5 font-bold text-slate-500">
+                          {idx + 1}
+                        </td>
                         <td className="p-2.5">
-                          <p className="font-bold text-slate-900 font-sans">{st.namaSantri}</p>
-                          <p className="text-[10px] text-slate-500 font-sans">{st.kelas} · {st.kamar}</p>
+                          <p className="font-bold text-slate-900 font-sans">
+                            {st.namaSantri}
+                          </p>
+                          <p className="text-[10px] text-slate-500 font-sans">
+                            Kelas {st.kelas} · Asrama {st.kamar}
+                          </p>
                         </td>
                         <td className="p-2.5 text-center">
-                          <span className={st.subuhTelat > 0 ? 'text-rose-700 font-bold' : 'text-slate-400'}>{st.subuhTelat}</span>
+                          <span
+                            className={
+                              st.subuhTelat > 0
+                                ? 'text-rose-700 font-bold'
+                                : 'text-slate-400'
+                            }
+                          >
+                            {st.subuhTelat}
+                          </span>
                         </td>
                         <td className="p-2.5 text-center">
-                          <span className={st.dzuhurTelat > 0 ? 'text-rose-700 font-bold' : 'text-slate-400'}>{st.dzuhurTelat}</span>
+                          <span
+                            className={
+                              st.dzuhurTelat > 0
+                                ? 'text-rose-700 font-bold'
+                                : 'text-slate-400'
+                            }
+                          >
+                            {st.dzuhurTelat}
+                          </span>
                         </td>
                         <td className="p-2.5 text-center">
-                          <span className={st.asharTelat > 0 ? 'text-rose-700 font-bold' : 'text-slate-400'}>{st.asharTelat}</span>
+                          <span
+                            className={
+                              st.asharTelat > 0
+                                ? 'text-rose-700 font-bold'
+                                : 'text-slate-400'
+                            }
+                          >
+                            {st.asharTelat}
+                          </span>
                         </td>
                         <td className="p-2.5 text-center">
-                          <span className={st.maghribTelat > 0 ? 'text-rose-700 font-bold' : 'text-slate-400'}>{st.maghribTelat}</span>
+                          <span
+                            className={
+                              st.maghribTelat > 0
+                                ? 'text-rose-700 font-bold'
+                                : 'text-slate-400'
+                            }
+                          >
+                            {st.maghribTelat}
+                          </span>
                         </td>
                         <td className="p-2.5 text-center">
-                          <span className={st.isyaTelat > 0 ? 'text-rose-700 font-bold' : 'text-slate-400'}>{st.isyaTelat}</span>
+                          <span
+                            className={
+                              st.isyaTelat > 0
+                                ? 'text-rose-700 font-bold'
+                                : 'text-slate-400'
+                            }
+                          >
+                            {st.isyaTelat}
+                          </span>
                         </td>
                         <td className="p-2.5 text-center font-bold text-rose-800 bg-rose-50/50">
-                          {st.totalTelat}
+                          {st.totalTelat}x
+                        </td>
+                        <td className="p-2.5 font-sans text-[11px] text-slate-700">
+                          {formatRincianSholatTelat(st)}
                         </td>
                         <td className="p-2.5 text-center font-sans">
                           {st.diputihkanRecords > 0 ? (
@@ -853,6 +1352,17 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                             </span>
                           )}
                         </td>
+                        <td className="p-2.5 text-center font-sans">
+                          <button
+                            type="button"
+                            onClick={() => handleQuickWaForSantri(st.namaSantri)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#075e54] hover:bg-[#054c42] text-white text-[10px] font-bold transition cursor-pointer whitespace-nowrap"
+                            title={`Buat Rekap WA untuk ${st.namaSantri}`}
+                          >
+                            <MessageCircle className="w-3 h-3" />
+                            <span>WA Anak Ini</span>
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -861,7 +1371,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
             </div>
           )}
 
-          {/* Tabel Data Sholat */}
+          {/* Tabel Data Sholat Harian */}
           {dateFilteredList.length === 0 ? (
             <div className="text-center py-10 text-xs text-slate-500 bg-stone-50 rounded-2xl border border-slate-200/60">
               Tidak ada data rekap sholat pada rentang tanggal ini.
@@ -903,23 +1413,33 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
 
                       <div className="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-slate-100">
                         <div className="flex items-center gap-1 text-[11px]">
-                          <span className="text-slate-500 font-semibold">Subuh:</span>
+                          <span className="text-slate-500 font-semibold">
+                            Subuh:
+                          </span>
                           {getStatusBadge(row.subuh)}
                         </div>
                         <div className="flex items-center gap-1 text-[11px]">
-                          <span className="text-slate-500 font-semibold">Dzuhur:</span>
+                          <span className="text-slate-500 font-semibold">
+                            Dzuhur:
+                          </span>
                           {getStatusBadge(row.dzuhur)}
                         </div>
                         <div className="flex items-center gap-1 text-[11px]">
-                          <span className="text-slate-500 font-semibold">Ashar:</span>
+                          <span className="text-slate-500 font-semibold">
+                            Ashar:
+                          </span>
                           {getStatusBadge(row.ashar)}
                         </div>
                         <div className="flex items-center gap-1 text-[11px]">
-                          <span className="text-slate-500 font-semibold">Maghrib:</span>
+                          <span className="text-slate-500 font-semibold">
+                            Maghrib:
+                          </span>
                           {getStatusBadge(row.maghrib)}
                         </div>
                         <div className="flex items-center gap-1 text-[11px]">
-                          <span className="text-slate-500 font-semibold">Isya:</span>
+                          <span className="text-slate-500 font-semibold">
+                            Isya:
+                          </span>
                           {getStatusBadge(row.isya)}
                         </div>
                       </div>

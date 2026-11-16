@@ -39,6 +39,7 @@ import {
   getSavedSholatList,
   saveSholatListLocally,
   createSholatRow,
+  upsertSholatRowInList,
   type SholatRow,
   type SholatInput,
 } from './utils/sholatEngine';
@@ -111,7 +112,7 @@ export default function App() {
 
   const handleAddSholat = async (input: SholatInput) => {
     const newRow = createSholatRow(input);
-    const updated = [newRow, ...sholatList];
+    const updated = upsertSholatRowInList(sholatList, newRow);
     setSholatList(updated);
     saveSholatListLocally(updated);
     if (gasWebAppUrl) {

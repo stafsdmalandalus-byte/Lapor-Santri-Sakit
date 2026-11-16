@@ -24,6 +24,7 @@ export interface SholatRow {
 }
 
 export interface SholatInput {
+  idSholat?: string;
   tanggal: string;
   nis: string;
   namaSantri: string;
@@ -36,6 +37,22 @@ export interface SholatInput {
   maghrib: SholatStatus;
   isya: SholatStatus;
   pencatat: string;
+}
+
+export interface SantriSholatSummary {
+  namaSantri: string;
+  nis: string;
+  kelas: string;
+  gedung: string;
+  kamar: string;
+  subuhTelat: number;
+  dzuhurTelat: number;
+  asharTelat: number;
+  maghribTelat: number;
+  isyaTelat: number;
+  totalTelat: number;
+  diputihkanRecords: number;
+  tanggalTelatList: string[];
 }
 
 const STORAGE_KEY_SHOLAT = 'alandalus_sholat_rekap_list_v1';
@@ -82,6 +99,49 @@ export function isSholatRowPutih(row: SholatRow): boolean {
   return ket.includes('PUTIH') || ket.includes('RESET');
 }
 
+export function normalizeSantriKey(name: string): string {
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Mencari data rekap sholat aktif (belum diputihkan) untuk santri dan tanggal yang sama.
+ * Jika ada lebih dari 1 baris lama pada tanggal yang sama, status TELAT akan digabungkan (dikunci).
+ */
+export function findExistingSholatRecordForDate(
+  list: SholatRow[],
+  tanggal: string,
+  namaSantri: string
+): SholatRow | null {
+  const targetDate = String(tanggal || '').trim();
+  const targetName = normalizeSantriKey(namaSantri);
+  if (!targetDate || !targetName) return null;
+
+  const matchingRows = list.filter(
+    (r) =>
+      !isSholatRowPutih(r) &&
+      String(r.tanggal || '').trim() === targetDate &&
+      normalizeSantriKey(r.namaSantri) === targetName
+  );
+
+  if (matchingRows.length === 0) return null;
+
+  const primary = matchingRows[0];
+  const merged: SholatRow = { ...primary };
+
+  for (const r of matchingRows) {
+    if (r.subuh === 'TELAT') merged.subuh = 'TELAT';
+    if (r.dzuhur === 'TELAT') merged.dzuhur = 'TELAT';
+    if (r.ashar === 'TELAT') merged.ashar = 'TELAT';
+    if (r.maghrib === 'TELAT') merged.maghrib = 'TELAT';
+    if (r.isya === 'TELAT') merged.isya = 'TELAT';
+  }
+
+  return merged;
+}
+
 export function getSavedSholatList(): SholatRow[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_SHOLAT);
@@ -103,7 +163,8 @@ export function saveSholatListLocally(list: SholatRow[]): void {
 
 export function createSholatRow(input: SholatInput): SholatRow {
   return {
-    idSholat: `SHOLAT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    idSholat:
+      input.idSholat || `SHOLAT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     tanggal: input.tanggal,
     nis: input.nis || '-',
     namaSantri: input.namaSantri,
@@ -121,6 +182,49 @@ export function createSholatRow(input: SholatInput): SholatRow {
   };
 }
 
+/**
+ * Menambahkan atau memperbarui baris rekap sholat untuk santri & tanggal yang sama
+ * agar tidak terjadi duplikasi baris pada tanggal yang sama.
+ */
+export function upsertSholatRowInList(
+  list: SholatRow[],
+  newRow: SholatRow
+): SholatRow[] {
+  const targetDate = String(newRow.tanggal || '').trim();
+  const targetName = normalizeSantriKey(newRow.namaSantri);
+
+  let foundIndex = -1;
+  const filtered: SholatRow[] = [];
+
+  for (let i = 0; i < list.length; i++) {
+    const r = list[i];
+    const isSameActiveRecord =
+      !isSholatRowPutih(r) &&
+      (r.idSholat === newRow.idSholat ||
+        (String(r.tanggal || '').trim() === targetDate &&
+          normalizeSantriKey(r.namaSantri) === targetName));
+
+    if (isSameActiveRecord) {
+      if (foundIndex === -1) {
+        foundIndex = filtered.length;
+        filtered.push({
+          ...r,
+          ...newRow,
+          idSholat: r.idSholat,
+        });
+      }
+      // Jika ada duplikat lama di tanggal & nama yang sama, lewati agar bersih menjadi 1 baris
+    } else {
+      filtered.push(r);
+    }
+  }
+
+  if (foundIndex === -1) {
+    return [newRow, ...filtered];
+  }
+  return filtered;
+}
+
 export function filterSholatByDateRange(
   list: SholatRow[],
   range: { startDate: string; endDate: string }
@@ -136,3 +240,152 @@ export function filterSholatByDateRange(
     return true;
   });
 }
+
+export function formatSholatDateID(dateStr: string): string {
+  if (!dateStr || !dateStr.trim()) return '-';
+  const parts = dateStr.trim().split('-');
+  if (parts.length !== 3) return dateStr;
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'Mei',
+    'Jun',
+    'Jul',
+    'Agu',
+    'Sep',
+    'Okt',
+    'Nov',
+    'Des',
+  ];
+  const mIdx = parseInt(parts[1], 10) - 1;
+  const mName = months[mIdx] || parts[1];
+  return `${parts[2]} ${mName} ${parts[0]}`;
+}
+
+export function formatRincianSholatTelat(st: {
+  subuhTelat: number;
+  dzuhurTelat: number;
+  asharTelat: number;
+  maghribTelat: number;
+  isyaTelat: number;
+}): string {
+  const items: string[] = [];
+  if (st.subuhTelat > 0) items.push(`Subuh (${st.subuhTelat}x)`);
+  if (st.dzuhurTelat > 0) items.push(`Dzuhur (${st.dzuhurTelat}x)`);
+  if (st.asharTelat > 0) items.push(`Ashar (${st.asharTelat}x)`);
+  if (st.maghribTelat > 0) items.push(`Maghrib (${st.maghribTelat}x)`);
+  if (st.isyaTelat > 0) items.push(`Isya (${st.isyaTelat}x)`);
+  return items.length > 0 ? items.join(', ') : 'Tidak ada keterlambatan (0x)';
+}
+
+export function generateSholatWhatsAppReport(params: {
+  summaries: SantriSholatSummary[];
+  startDate: string;
+  endDate: string;
+  mode: 'ALL' | 'SINGLE';
+  selectedSantriName?: string;
+}): string {
+  const { summaries, startDate, endDate, mode, selectedSantriName } = params;
+
+  const periodeLabel =
+    startDate && endDate
+      ? startDate === endDate
+        ? formatSholatDateID(startDate)
+        : `${formatSholatDateID(startDate)} s/d ${formatSholatDateID(endDate)}`
+      : startDate
+      ? `Mulai ${formatSholatDateID(startDate)}`
+      : endDate
+      ? `Sampai ${formatSholatDateID(endDate)}`
+      : 'Semua Tanggal';
+
+  if (mode === 'SINGLE') {
+    const targetKey = normalizeSantriKey(selectedSantriName || '');
+    const st = summaries.find(
+      (s) => normalizeSantriKey(s.namaSantri) === targetKey
+    );
+
+    if (!st) {
+      return [
+        '🕌 *REKAP KETERLAMBATAN SHOLAT SANTRI*',
+        '*PESANTREN ISLAM INTERNASIONAL AL-ANDALUS*',
+        `🗓️ *Periode:* ${periodeLabel}`,
+        '',
+        '_Pilih nama santri untuk melihat format laporan WhatsApp._',
+      ].join('\n');
+    }
+
+    const rincianList: string[] = [];
+    if (st.subuhTelat > 0) rincianList.push(`• *Subuh:* ${st.subuhTelat}x`);
+    if (st.dzuhurTelat > 0) rincianList.push(`• *Dzuhur:* ${st.dzuhurTelat}x`);
+    if (st.asharTelat > 0) rincianList.push(`• *Ashar:* ${st.asharTelat}x`);
+    if (st.maghribTelat > 0) rincianList.push(`• *Maghrib:* ${st.maghribTelat}x`);
+    if (st.isyaTelat > 0) rincianList.push(`• *Isya:* ${st.isyaTelat}x`);
+
+    const lines = [
+      '🕌 *LAPORAN REKAP KETERLAMBATAN SHOLAT SANTRI*',
+      '*PESANTREN ISLAM INTERNASIONAL AL-ANDALUS*',
+      '━━━━━━━━━━━━━━━━━━━━',
+      `🗓️ *Rentang Tanggal:* ${periodeLabel}`,
+      `👤 *Nama Santri:* ${st.namaSantri}`,
+      `🏫 *Kelas:* ${st.kelas || '-'}`,
+      `🏠 *Asrama / Kamar:* ${st.kamar || '-'}`,
+      `📊 *Total Keseluruhan Telat:* *${st.totalTelat} Kali*`,
+      '',
+      '📌 *Rincian Sholat yang Telat:*',
+      ...(rincianList.length > 0
+        ? rincianList
+        : ['• _Alhamdulillah, tidak ada keterlambatan (0x)_']),
+      '',
+      `📋 *Rekap 5 Waktu:* Subuh ${st.subuhTelat}x | Dzuhur ${st.dzuhurTelat}x | Ashar ${st.asharTelat}x | Maghrib ${st.maghribTelat}x | Isya ${st.isyaTelat}x`,
+      ...(st.tanggalTelatList.length > 0
+        ? [
+            `📅 *Tanggal Tercatat:* ${st.tanggalTelatList
+              .map(formatSholatDateID)
+              .join(', ')}`,
+          ]
+        : []),
+      '━━━━━━━━━━━━━━━━━━━━',
+      '_Bagian Pengasuhan Pesantren Al-Andalus_',
+    ];
+
+    return lines.join('\n');
+  }
+
+  // Mode ALL (Keseluruhan Anak)
+  const activeSummaries = summaries.filter((s) => s.totalTelat > 0);
+  const targetList = activeSummaries.length > 0 ? activeSummaries : summaries;
+  const grandTotalTelat = targetList.reduce((acc, cur) => acc + cur.totalTelat, 0);
+
+  const lines: string[] = [
+    '🕌 *REKAP KETERLAMBATAN SHOLAT SANTRI (KESELURUHAN)*',
+    '*PESANTREN ISLAM INTERNASIONAL AL-ANDALUS*',
+    '━━━━━━━━━━━━━━━━━━━━',
+    `🗓️ *Rentang Tanggal:* ${periodeLabel}`,
+    `👥 *Jumlah Santri:* ${targetList.length} Santri`,
+    `📊 *Total Keseluruhan Keterlambatan:* *${grandTotalTelat} Kali*`,
+    '━━━━━━━━━━━━━━━━━━━━',
+  ];
+
+  if (targetList.length === 0) {
+    lines.push('');
+    lines.push('_Tidak ada catatan keterlambatan sholat pada rentang tanggal ini._');
+  } else {
+    targetList.forEach((st, idx) => {
+      lines.push('');
+      lines.push(`${idx + 1}. *${st.namaSantri}*`);
+      lines.push(`   • Kelas: ${st.kelas || '-'}`);
+      lines.push(`   • Asrama / Kamar: ${st.kamar || '-'}`);
+      lines.push(`   • Total Keseluruhan Telat: *${st.totalTelat} Kali*`);
+      lines.push(`   • Sholat yang Telat: *${formatRincianSholatTelat(st)}*`);
+    });
+  }
+
+  lines.push('');
+  lines.push('━━━━━━━━━━━━━━━━━━━━');
+  lines.push('_Bagian Pengasuhan Pesantren Al-Andalus_');
+
+  return lines.join('\n');
+}
+
