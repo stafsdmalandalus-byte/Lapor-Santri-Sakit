@@ -100,6 +100,7 @@ import {
 } from './utils/gasClient';
 
 const LOGO_URL = '/assets/aistudio/Logo_Al-Andalus_c7d889d5.png';
+const STATIC_SESSION_KEY = 'alandalus_static_portal_session_v1';
 
 type AdminMenuTab =
   | 'hub'
@@ -235,6 +236,21 @@ export default function App() {
         if (isServerApiUnavailableError(err)) {
           serverApiAvailableRef.current = false;
           setServerApiAvailable(false);
+          try {
+            const rawSaved = localStorage.getItem(STATIC_SESSION_KEY);
+            if (rawSaved) {
+              const parsed = JSON.parse(rawSaved) as {
+                activeMusyrif?: MusyrifProfile;
+                userRole?: UserRole;
+              };
+              if (parsed?.activeMusyrif?.namaMusyrif && parsed?.userRole) {
+                setActiveMusyrif(parsed.activeMusyrif);
+                setUserRole(parsed.userRole);
+              }
+            }
+          } catch {
+            // ignore storage errors
+          }
           const targetUrl = getSavedGasUrl() || DEFAULT_GAS_WEB_APP_URL;
           if (targetUrl) {
             try {
@@ -259,9 +275,44 @@ export default function App() {
     };
   }, [applyGasSnapshot, loadBootstrap]);
 
-  // Sinkronisasi real-time antar perangkat (SSE + fallback polling ringan)
+  // Simpan sesi lokal saat berjalan di Vercel / host statis (tanpa backend Express)
   useEffect(() => {
-    if (!activeMusyrif || !serverApiAvailable) return;
+    if (!sessionReady || serverApiAvailable) return;
+    try {
+      if (activeMusyrif) {
+        localStorage.setItem(
+          STATIC_SESSION_KEY,
+          JSON.stringify({ activeMusyrif, userRole })
+        );
+      } else {
+        localStorage.removeItem(STATIC_SESSION_KEY);
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }, [sessionReady, serverApiAvailable, activeMusyrif, userRole]);
+
+  // Sinkronisasi real-time antar perangkat (SSE bila server aktif, polling Sheet tiap 15 detik di Vercel)
+  useEffect(() => {
+    if (!activeMusyrif) return;
+
+    if (!serverApiAvailable) {
+      const targetUrl = gasWebAppUrl || DEFAULT_GAS_WEB_APP_URL;
+      if (!targetUrl) return;
+      const gasTimer = setInterval(() => {
+        if (isPullingRef.current) return;
+        isPullingRef.current = true;
+        void fetchAllSheetsFromGas(targetUrl)
+          .then((gasData) => {
+            applyGasSnapshot(gasData);
+          })
+          .catch(() => {})
+          .finally(() => {
+            isPullingRef.current = false;
+          });
+      }, 15000);
+      return () => clearInterval(gasTimer);
+    }
 
     let fallbackTimer: ReturnType<typeof setInterval> | null = null;
     let es: EventSource | null = null;
@@ -295,7 +346,7 @@ export default function App() {
       es?.close();
       if (fallbackTimer) clearInterval(fallbackTimer);
     };
-  }, [activeMusyrif, loadBootstrap, serverApiAvailable]);
+  }, [activeMusyrif, applyGasSnapshot, gasWebAppUrl, loadBootstrap, serverApiAvailable]);
 
   const handleServerLogin = async (
     namaUser: string,
@@ -1128,14 +1179,20 @@ export default function App() {
                     {activeMusyrif?.namaMusyrif || (userRole === 'ADMIN_PENGASUHAN' ? 'Admin Pengasuhan' : 'Admin Pusat / SDM')}
                   </p>
                   <p className="text-[10px] text-emerald-200 truncate">
-                    ⚡ Server Cepat Real-Time
-                    {storageMode === 'firestore_and_sheet' ? ' · Firestore Aktif' : ''}
+                    {serverApiAvailable
+                      ? '⚡ Server Cepat Real-Time'
+                      : '📊 Mode Langsung Google Sheets'}
+                    {serverApiAvailable && storageMode === 'firestore_and_sheet'
+                      ? ' · Firestore Aktif'
+                      : ''}
                     {gasWebAppUrl
                       ? mirrorStatus === 'syncing'
-                        ? ' · Mirror Sheet...'
+                        ? ' · Sinkron Sheet...'
                         : mirrorStatus === 'queued'
                         ? ' · Sheet tertunda'
-                        : ' · Mirror Sheet Aktif'
+                        : serverApiAvailable
+                        ? ' · Mirror Sheet Aktif'
+                        : ' · Terhubung'
                       : ''}
                   </p>
                 </div>
