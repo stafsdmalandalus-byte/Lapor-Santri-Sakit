@@ -856,6 +856,35 @@ export async function postSholatToGas(
   return res;
 }
 
+export async function postSholatBatchToGas(
+  gasUrl: string,
+  rows: Array<
+    SholatRow & {
+      unlockedPrayers?: Array<
+        'subuh' | 'dzuhur' | 'ashar' | 'maghrib' | 'isya'
+      >;
+    }
+  >
+): Promise<{ status: string; batchProcessed?: boolean; message?: string }> {
+  if (!gasUrl.trim() || rows.length === 0) return { status: 'success' };
+  const res = await postActionToGas<{
+    status: string;
+    batchProcessed?: boolean;
+    message?: string;
+  }>(gasUrl, {
+    action: 'simpanSholatBatch',
+    items: rows,
+  });
+
+  // Fallback jika Code.gs yang ter-deploy belum memiliki action simpanSholatBatch
+  if (!res.batchProcessed && res.status === 'success') {
+    for (const item of rows) {
+      await postSholatToGas(gasUrl, item);
+    }
+  }
+  return res;
+}
+
 export async function deleteSholatFromGas(
   gasUrl: string,
   idSholat: string

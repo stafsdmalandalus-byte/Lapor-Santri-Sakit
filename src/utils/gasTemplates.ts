@@ -816,6 +816,11 @@ function handleApiAction_(action, payload, e) {
       return sendJsonResponse_(result, e);
     }
 
+    if (action === 'simpanSholatBatch') {
+      const result = simpanRekapSholatBatch(payload);
+      return sendJsonResponse_(result, e);
+    }
+
     if (action === 'deleteSholat') {
       const result = hapusRekapSholat(payload);
       return sendJsonResponse_(result, e);
@@ -1910,6 +1915,165 @@ function simpanRekapSholat(payload) {
       status: 'success',
       idSholat: idSholat,
       sholatList: getRekapSholat()
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function simpanRekapSholatBatch(payload) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    if (items.length === 0) {
+      return { status: 'success', batchProcessed: true, updatedCount: 0, insertedCount: 0 };
+    }
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = findSheetSmart_(ss, SHOLAT_SHEET_CANDIDATES_);
+    if (!sheet) {
+      sheet = ss.insertSheet(SHEET_SHOLAT);
+      sheet.getRange(1, 1, 1, 15).setValues([[
+        'ID_Sholat', 'Tanggal', 'NIS', 'Nama_Santri', 'Kelas', 'Gedung', 'Kamar',
+        'Subuh', 'Dzuhur', 'Ashar', 'Maghrib', 'Isya', 'Pencatat', 'Timestamp', 'Keterangan'
+      ]]);
+    } else if (sheet.getLastColumn() < 15) {
+      sheet.getRange(1, 15).setValue('Keterangan');
+    }
+
+    const headerWidth = Math.max(15, sheet.getLastColumn());
+    const headerRow = sheet.getRange(1, 1, 1, headerWidth).getDisplayValues()[0];
+    const cols = detectSholatColumns_(headerRow);
+    const colWidth = Math.max(headerWidth, cols.colCount);
+
+    const lastRow = sheet.getLastRow();
+    const existingData = lastRow >= 2
+      ? sheet.getRange(2, 1, lastRow - 1, colWidth).getDisplayValues()
+      : [];
+
+    let updatedCount = 0;
+    const rowsToAppend = [];
+
+    for (let k = 0; k < items.length; k++) {
+      const item = items[k] || {};
+      const idSholat = item.idSholat || ('SHOLAT-' + Date.now() + '-' + k);
+      const tanggal = normalizeDateStr_(item.tanggal || Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd'));
+      const nis = item.nis || '-';
+      const namaSantri = item.namaSantri || '';
+      if (!namaSantri) continue;
+
+      const kelas = item.kelas || '-';
+      const gedung = item.gedung || '-';
+      const kamar = item.kamar || '-';
+      const subuh = item.subuh || 'TEPAT';
+      const dzuhur = item.dzuhur || 'TEPAT';
+      const ashar = item.ashar || 'TEPAT';
+      const maghrib = item.maghrib || 'TEPAT';
+      const isya = item.isya || 'TEPAT';
+      const pencatat = item.pencatat || 'Admin';
+      const timestamp = item.timestamp || new Date().toISOString();
+      const keterangan = item.keterangan || 'AKTIF';
+
+      const targetName = cleanPersonName_(namaSantri);
+      const unlockedList = Array.isArray(item.unlockedPrayers) ? item.unlockedPrayers : [];
+      const isUnlocked = function(prayerKey) {
+        return unlockedList.indexOf(prayerKey) !== -1;
+      };
+
+      let matchedIdx = -1;
+      for (let i = existingData.length - 1; i >= 0; i--) {
+        const r = existingData[i];
+        const rId = String(r[cols.idxId] || '').trim();
+        const rTgl = normalizeDateStr_(r[cols.idxTgl]);
+        const rNama = cleanPersonName_(r[cols.idxNama]);
+        const rKet = String(r[cols.idxKet] || 'AKTIF').toUpperCase();
+        const isPutih = rKet.indexOf('PUTIH') !== -1 || rKet.indexOf('RESET') !== -1;
+        if (!isPutih && (rId === idSholat || (rTgl === tanggal && rNama === targetName))) {
+          matchedIdx = i;
+          break;
+        }
+      }
+
+      if (matchedIdx !== -1) {
+        const r = existingData[matchedIdx];
+        const prevSubuh   = String(r[cols.idxSubuh] || 'TEPAT').trim();
+        const prevDzuhur  = String(r[cols.idxDzuhur] || 'TEPAT').trim();
+        const prevAshar   = String(r[cols.idxAshar] || 'TEPAT').trim();
+        const prevMaghrib = String(r[cols.idxMaghrib] || 'TEPAT').trim();
+        const prevIsya    = String(r[cols.idxIsya] || 'TEPAT').trim();
+
+        const finalSubuh   = (prevSubuh === 'TELAT' && !isUnlocked('subuh')) ? 'TELAT' : subuh;
+        const finalDzuhur  = (prevDzuhur === 'TELAT' && !isUnlocked('dzuhur')) ? 'TELAT' : dzuhur;
+        const finalAshar   = (prevAshar === 'TELAT' && !isUnlocked('ashar')) ? 'TELAT' : ashar;
+        const finalMaghrib = (prevMaghrib === 'TELAT' && !isUnlocked('maghrib')) ? 'TELAT' : maghrib;
+        const finalIsya    = (prevIsya === 'TELAT' && !isUnlocked('isya')) ? 'TELAT' : isya;
+
+        const prevPencatat = String(r[cols.idxPencatat] || '').trim();
+        let finalPencatat = pencatat;
+        if (prevPencatat && pencatat) {
+          if (prevPencatat.toLowerCase().indexOf(pencatat.toLowerCase()) === -1) {
+            finalPencatat = prevPencatat + ', ' + pencatat;
+          } else {
+            finalPencatat = prevPencatat;
+          }
+        } else if (prevPencatat) {
+          finalPencatat = prevPencatat;
+        }
+
+        const updatedRow = r.slice();
+        while (updatedRow.length < colWidth) updatedRow.push('');
+        updatedRow[cols.idxId] = String(r[cols.idxId] || '').trim() || idSholat;
+        updatedRow[cols.idxTgl] = tanggal;
+        updatedRow[cols.idxNis] = nis;
+        updatedRow[cols.idxNama] = namaSantri;
+        updatedRow[cols.idxKelas] = kelas;
+        updatedRow[cols.idxGedung] = gedung;
+        updatedRow[cols.idxKamar] = kamar;
+        updatedRow[cols.idxSubuh] = finalSubuh;
+        updatedRow[cols.idxDzuhur] = finalDzuhur;
+        updatedRow[cols.idxAshar] = finalAshar;
+        updatedRow[cols.idxMaghrib] = finalMaghrib;
+        updatedRow[cols.idxIsya] = finalIsya;
+        updatedRow[cols.idxPencatat] = finalPencatat;
+        updatedRow[cols.idxTs] = timestamp;
+        updatedRow[cols.idxKet] = r[cols.idxKet] || keterangan;
+
+        existingData[matchedIdx] = updatedRow;
+        sheet.getRange(matchedIdx + 2, 1, 1, colWidth).setValues([updatedRow]);
+        updatedCount++;
+      } else {
+        const newRow = new Array(colWidth).fill('');
+        newRow[cols.idxId] = idSholat;
+        newRow[cols.idxTgl] = tanggal;
+        newRow[cols.idxNis] = nis;
+        newRow[cols.idxNama] = namaSantri;
+        newRow[cols.idxKelas] = kelas;
+        newRow[cols.idxGedung] = gedung;
+        newRow[cols.idxKamar] = kamar;
+        newRow[cols.idxSubuh] = subuh;
+        newRow[cols.idxDzuhur] = dzuhur;
+        newRow[cols.idxAshar] = ashar;
+        newRow[cols.idxMaghrib] = maghrib;
+        newRow[cols.idxIsya] = isya;
+        newRow[cols.idxPencatat] = pencatat;
+        newRow[cols.idxTs] = timestamp;
+        newRow[cols.idxKet] = keterangan;
+        rowsToAppend.push(newRow);
+        existingData.push(newRow);
+      }
+    }
+
+    if (rowsToAppend.length > 0) {
+      const startAppendRow = sheet.getLastRow() + 1;
+      sheet.getRange(startAppendRow, 1, rowsToAppend.length, colWidth).setValues(rowsToAppend);
+    }
+
+    return {
+      status: 'success',
+      batchProcessed: true,
+      updatedCount: updatedCount,
+      insertedCount: rowsToAppend.length
     };
   } finally {
     lock.releaseLock();

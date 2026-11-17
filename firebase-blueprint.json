@@ -1,0 +1,635 @@
+{
+  "entities": {
+    "MasterSantri": {
+      "title": "MasterSantri",
+      "description": "Master data santri Pesantren Al-Andalus (NIS, nama, kelas, kamar, pengasuh).",
+      "type": "object",
+      "properties": {
+        "idSantri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "namaSantri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "kelas": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "kamar": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "gedung": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "pengasuh1": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "pengasuh2": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "allowedEmails": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "idSantri",
+        "namaSantri",
+        "kelas",
+        "kamar",
+        "ownerUid",
+        "allowedEmails",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UserRoleCredential": {
+      "title": "UserRoleCredential",
+      "description": "Data akun login internal musyrif dan admin (termasuk password, khusus Admin).",
+      "type": "object",
+      "properties": {
+        "namaUser": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin_pusat", "admin_pengasuhan", "admin", "user"],
+          "maxLength": 32
+        },
+        "password": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "keterangan": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "allowedEmails": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "namaUser",
+        "role",
+        "password",
+        "keterangan",
+        "ownerUid",
+        "allowedEmails",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminAccount": {
+      "title": "AdminAccount",
+      "description": "Daftar UID admin resmi yang berwenang mengelola seluruh portal.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "email",
+        "ownerUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StaffAccess": {
+      "title": "StaffAccess",
+      "description": "Daftar email Google staf/musyrif/admin yang diizinkan mengakses data bersama.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "nama": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin_pusat", "admin_pengasuhan", "user"],
+          "maxLength": 32
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "allowedEmails": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "email",
+        "role",
+        "ownerUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LaporanMusyrif": {
+      "title": "LaporanMusyrif",
+      "description": "Catatan laporan santri sakit dari musyrif dan status penanganannya.",
+      "type": "object",
+      "properties": {
+        "idLaporan": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "timestamp": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "tanggalLaporan": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "musrifPelapor": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "idSantri": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "namaSantri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "kelas": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "kamar": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "keluhanUtama": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "statusPenanganan": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "tindakanUKP": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "waktuUpdate": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "allowedEmails": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "idLaporan",
+        "tanggalLaporan",
+        "musrifPelapor",
+        "namaSantri",
+        "keluhanUtama",
+        "statusPenanganan",
+        "ownerUid",
+        "allowedEmails",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DataUKP": {
+      "title": "DataUKP",
+      "description": "Data pemeriksaan kesehatan dari Unit Kesehatan Pesantren (UKP).",
+      "type": "object",
+      "properties": {
+        "idRow": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "tanggalPemeriksaan": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "namaSantri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "tindakan": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "allowedEmails": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "idRow",
+        "tanggalPemeriksaan",
+        "namaSantri",
+        "tindakan",
+        "ownerUid",
+        "allowedEmails",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PerizinanPulang": {
+      "title": "PerizinanPulang",
+      "description": "Surat izin pulang santri, status kepulangan, dan riwayat perpanjangan.",
+      "type": "object",
+      "properties": {
+        "idPerizinan": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "no": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "nama": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "kelas": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "gedung": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "kamar": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "izin": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "keterangan": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "tujuan": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "rekomendasi": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "dariTanggal": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "dariHari": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "dariJam": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "sampaiTanggal": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "sampaiHari": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "sampaiJam": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "durasi": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "bulan": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "pengasuh1": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "pengasuh2": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "walikelas": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "tibaTanggal": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "keteranganTiba": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "isExtended": {
+          "type": "boolean"
+        },
+        "sampaiTanggalAwal": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "alasanPerpanjangan": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "perpanjanganKe": {
+          "type": "number"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "allowedEmails": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "idPerizinan",
+        "no",
+        "nama",
+        "dariTanggal",
+        "sampaiTanggal",
+        "ownerUid",
+        "allowedEmails",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SholatRecord": {
+      "title": "SholatRecord",
+      "description": "Rekap harian keterlambatan sholat 5 waktu santri dengan status penguncian dan pemutihan.",
+      "type": "object",
+      "properties": {
+        "idSholat": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "tanggal": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 32
+        },
+        "nis": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "namaSantri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "kelas": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "gedung": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "kamar": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "subuh": {
+          "type": "string",
+          "enum": ["TEPAT", "TELAT", "ALFA", "IZIN"],
+          "maxLength": 16
+        },
+        "dzuhur": {
+          "type": "string",
+          "enum": ["TEPAT", "TELAT", "ALFA", "IZIN"],
+          "maxLength": 16
+        },
+        "ashar": {
+          "type": "string",
+          "enum": ["TEPAT", "TELAT", "ALFA", "IZIN"],
+          "maxLength": 16
+        },
+        "maghrib": {
+          "type": "string",
+          "enum": ["TEPAT", "TELAT", "ALFA", "IZIN"],
+          "maxLength": 16
+        },
+        "isya": {
+          "type": "string",
+          "enum": ["TEPAT", "TELAT", "ALFA", "IZIN"],
+          "maxLength": 16
+        },
+        "pencatat": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "timestamp": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "keterangan": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "allowedEmails": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "idSholat",
+        "tanggal",
+        "namaSantri",
+        "subuh",
+        "dzuhur",
+        "ashar",
+        "maghrib",
+        "isya",
+        "pencatat",
+        "keterangan",
+        "ownerUid",
+        "allowedEmails",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/master_santri/{santriDocId}": {
+      "schema": { "$ref": "#/entities/MasterSantri" },
+      "description": "Data induk santri Pesantren Al-Andalus."
+    },
+    "/users_role/{userDocId}": {
+      "schema": { "$ref": "#/entities/UserRoleCredential" },
+      "description": "Akun pengguna portal (hanya dapat dibaca/dikelola Admin)."
+    },
+    "/admins/{uid}": {
+      "schema": { "$ref": "#/entities/AdminAccount" },
+      "description": "Daftar UID admin resmi Firebase."
+    },
+    "/staff_access/{emailKey}": {
+      "schema": { "$ref": "#/entities/StaffAccess" },
+      "description": "Daftar email Google staf/musyrif yang diizinkan mengakses portal."
+    },
+    "/laporan_musyrif/{laporanId}": {
+      "schema": { "$ref": "#/entities/LaporanMusyrif" },
+      "description": "Laporan santri sakit dari musyrif."
+    },
+    "/data_ukp/{ukpDocId}": {
+      "schema": { "$ref": "#/entities/DataUKP" },
+      "description": "Catatan pemeriksaan dari Unit Kesehatan Pesantren (UKP)."
+    },
+    "/perizinan_pulang/{perizinanId}": {
+      "schema": { "$ref": "#/entities/PerizinanPulang" },
+      "description": "Surat perizinan pulang santri dan status kepulangan."
+    },
+    "/sholat_records/{sholatId}": {
+      "schema": { "$ref": "#/entities/SholatRecord" },
+      "description": "Rekap harian keterlambatan sholat 5 waktu santri."
+    }
+  }
+}

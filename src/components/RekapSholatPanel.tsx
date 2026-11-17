@@ -19,15 +19,21 @@ import {
   Users,
   User,
   RefreshCw,
+  CheckSquare,
+  Square,
+  X,
 } from 'lucide-react';
 import {
   type MasterSantri,
   type DateRangeFilter,
   type UserRoleRow,
+  type LaporanMusyrifRow,
   searchMasterSantri,
   getTodayDateISO,
   getDynamicDatePresets,
+  normalizeDateYYYYMMDD,
 } from '../utils/ukpSyncEngine';
+import type { PerizinanRow } from '../utils/perizinanEngine';
 import {
   type SholatRow,
   type SholatStatus,
@@ -58,6 +64,17 @@ interface RekapSholatPanelProps {
       }
     | void
   >;
+  onAddSholatBatch?: (
+    inputs: SholatInput[]
+  ) => Promise<
+    | {
+        savedCount: number;
+        syncedToSheet: boolean;
+        needsGasUpdate?: boolean;
+        errorMessage?: string;
+      }
+    | void
+  >;
   onDeleteSholat: (idSholat: string) => void;
   onResetSholatRange?: (
     startDate: string,
@@ -65,6 +82,8 @@ interface RekapSholatPanelProps {
     keterangan: string
   ) => void;
   usersRoleList?: UserRoleRow[];
+  perizinanList?: PerizinanRow[];
+  laporanList?: LaporanMusyrifRow[];
   dateRange: DateRangeFilter;
   onDateRangeChange: (range: DateRangeFilter) => void;
   activeMusyrifName?: string;
@@ -78,13 +97,24 @@ interface RekapSholatPanelProps {
 
 type PrayerKey = 'subuh' | 'dzuhur' | 'ashar' | 'maghrib' | 'isya';
 
+const PRAYER_META: Array<{ key: PrayerKey; label: string; icon: string }> = [
+  { key: 'subuh', label: 'Subuh', icon: '🌅' },
+  { key: 'dzuhur', label: 'Dzuhur', icon: '☀️' },
+  { key: 'ashar', label: 'Ashar', icon: '🌤️' },
+  { key: 'maghrib', label: 'Maghrib', icon: '🌆' },
+  { key: 'isya', label: 'Isya', icon: '🌙' },
+];
+
 export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
   masterData,
   sholatList,
   onAddSholat,
+  onAddSholatBatch,
   onDeleteSholat,
   onResetSholatRange,
   usersRoleList = [],
+  perizinanList = [],
+  laporanList = [],
   dateRange,
   onDateRangeChange,
   activeMusyrifName = 'Admin Pengasuhan',
@@ -97,253 +127,400 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
 }) => {
   const [subTab, setSubTab] = useState<'input' | 'rekap'>('input');
 
-  // Form input state
+  // Form input massal (Pilih banyak santri dulu -> klik 1 atau beberapa sholat telat)
   const [tanggal, setTanggal] = useState<string>(() => getTodayDateISO());
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [selectedSantri, setSelectedSantri] = useState<MasterSantri | null>(
-    null
-  );
-  const [isDropdownOpen, setIsDropdownOpen] = useState<boolean>(false);
-
-  const [subuh, setSubuh] = useState<SholatStatus>('TEPAT');
-  const [dzuhur, setDzuhur] = useState<SholatStatus>('TEPAT');
-  const [ashar, setAshar] = useState<SholatStatus>('TEPAT');
-  const [maghrib, setMaghrib] = useState<SholatStatus>('TEPAT');
-  const [isya, setIsya] = useState<SholatStatus>('TEPAT');
-
-  // Status penguncian otomatis dari input sebelumnya di tanggal yang sama
-  const [savedLockedMap, setSavedLockedMap] = useState<
-    Record<PrayerKey, boolean>
-  >({
-    subuh: false,
-    dzuhur: false,
-    ashar: false,
-    maghrib: false,
-    isya: false,
-  });
-  const [unlockedPrayers, setUnlockedPrayers] = useState<Set<PrayerKey>>(
+  const [filterKelas, setFilterKelas] = useState<string>('ALL');
+  const [filterKamar, setFilterKamar] = useState<string>('ALL');
+  const [checklistMode, setChecklistMode] = useState<'ALL' | 'UNRECORDED'>('ALL');
+  const [stayOnInputAfterSave, setStayOnInputAfterSave] = useState<boolean>(true);
+  const [selectedSantriMap, setSelectedSantriMap] = useState<
+    Map<string, MasterSantri>
+  >(() => new Map());
+  const [batchTelatPrayers, setBatchTelatPrayers] = useState<Set<PrayerKey>>(
     () => new Set()
   );
+  const [unlockedBySantri, setUnlockedBySantri] = useState<
+    Map<string, Set<PrayerKey>>
+  >(() => new Map());
+  const [isSubmittingBatch, setIsSubmittingBatch] = useState<boolean>(false);
 
-  // State untuk Ekspor Rekap Excel & PDF (Keseluruhan Anak / Per Anak)
+  // State Filter & Ekspor Tab Rekap
+  const [rekapKelas, setRekapKelas] = useState<string>('ALL');
+  const [rekapKamar, setRekapKamar] = useState<string>('ALL');
   const [exportMode, setExportMode] = useState<'ALL' | 'SINGLE'>('ALL');
   const [selectedExportSantri, setSelectedExportSantri] = useState<string>('');
   const exportSectionRef = useRef<HTMLDivElement>(null);
 
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const filteredSantri = searchMasterSantri(searchQuery, masterData);
   const datePresets = getDynamicDatePresets();
 
-  // Nama santri aktif yang sedang dipilih/diketik pada form input
-  const currentInputSantriName = useMemo(() => {
-    if (selectedSantri) return selectedSantri.namaSantri;
-    return searchQuery.trim();
-  }, [selectedSantri, searchQuery]);
+  const kelasOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of masterData) {
+      const k = String(s.kelas || '').trim();
+      if (k && k !== '-') set.add(k);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [masterData]);
 
-  // Cek apakah di tanggal tersebut santri ini sudah pernah diinput (dan belum diputihkan)
-  const existingDayRecord = useMemo(() => {
-    if (!currentInputSantriName || !tanggal) return null;
-    return findExistingSholatRecordForDate(
-      sholatList,
-      tanggal,
-      currentInputSantriName
-    );
-  }, [sholatList, tanggal, currentInputSantriName]);
+  const kamarOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of masterData) {
+      const km = String(s.kamar || '').trim();
+      if (km && km !== '-') set.add(km);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [masterData]);
 
-  // Otomatis muat dan kunci status sholat yang sudah tercatat TELAT ketika tanggal atau santri dipilih
-  useEffect(() => {
-    if (existingDayRecord) {
-      setSubuh(existingDayRecord.subuh);
-      setDzuhur(existingDayRecord.dzuhur);
-      setAshar(existingDayRecord.ashar);
-      setMaghrib(existingDayRecord.maghrib);
-      setIsya(existingDayRecord.isya);
-      setSavedLockedMap({
-        subuh: existingDayRecord.subuh === 'TELAT',
-        dzuhur: existingDayRecord.dzuhur === 'TELAT',
-        ashar: existingDayRecord.ashar === 'TELAT',
-        maghrib: existingDayRecord.maghrib === 'TELAT',
-        isya: existingDayRecord.isya === 'TELAT',
-      });
-    } else {
-      setSubuh('TEPAT');
-      setDzuhur('TEPAT');
-      setAshar('TEPAT');
-      setMaghrib('TEPAT');
-      setIsya('TEPAT');
-      setSavedLockedMap({
-        subuh: false,
-        dzuhur: false,
-        ashar: false,
-        maghrib: false,
-        isya: false,
+  // Lencana otomatis santri sedang Izin Pulang atau Lapor Sakit pada tanggal terpilih
+  const santriStatusBadgesMap = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        isIzinPulang: boolean;
+        izinDetail: string;
+        isSakit: boolean;
+        keluhan: string;
+      }
+    >();
+    const tglNorm = normalizeDateYYYYMMDD(tanggal) || tanggal;
+
+    for (const p of perizinanList) {
+      if (String(p.tibaTanggal || '').trim()) continue;
+      const dari = normalizeDateYYYYMMDD(p.dariTanggal);
+      const sampai = normalizeDateYYYYMMDD(p.sampaiTanggal);
+      const isActiveOnDate = Boolean(
+        dari &&
+          ((sampai && tglNorm >= dari && tglNorm <= sampai) ||
+            (!sampai && tglNorm === dari))
+      );
+      if (!isActiveOnDate) continue;
+      const key = normalizeSantriKey(p.nama);
+      if (!key) continue;
+      const prev = map.get(key) || {
+        isIzinPulang: false,
+        izinDetail: '',
+        isSakit: false,
+        keluhan: '',
+      };
+      map.set(key, {
+        ...prev,
+        isIzinPulang: true,
+        izinDetail: p.izin || 'Izin Pulang',
       });
     }
-    setUnlockedPrayers(new Set());
-  }, [existingDayRecord]);
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        dropdownRef.current &&
-        !dropdownRef.current.contains(e.target as Node)
-      ) {
-        setIsDropdownOpen(false);
+    for (const l of laporanList) {
+      const tglLap = normalizeDateYYYYMMDD(l.tanggalLaporan);
+      const isWaiting = String(l.statusPenanganan || '')
+        .toUpperCase()
+        .includes('MENUNGGU');
+      if (tglLap !== tglNorm && !isWaiting) continue;
+      const key = normalizeSantriKey(l.namaSantri);
+      if (!key) continue;
+      const prev = map.get(key) || {
+        isIzinPulang: false,
+        izinDetail: '',
+        isSakit: false,
+        keluhan: '',
+      };
+      map.set(key, {
+        ...prev,
+        isSakit: true,
+        keluhan: prev.keluhan || l.keluhanUtama || 'Sakit',
+      });
+    }
+
+    return map;
+  }, [perizinanList, laporanList, tanggal]);
+
+  const baseFilteredSantri = useMemo(() => {
+    const base = searchQuery.trim()
+      ? searchMasterSantri(searchQuery, masterData)
+      : masterData;
+    return base.filter((s) => {
+      if (filterKelas !== 'ALL' && String(s.kelas || '').trim() !== filterKelas) {
+        return false;
       }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+      if (filterKamar !== 'ALL' && String(s.kamar || '').trim() !== filterKamar) {
+        return false;
+      }
+      return true;
+    });
+  }, [searchQuery, masterData, filterKelas, filterKamar]);
 
-  const handleSelectSantri = (santri: MasterSantri) => {
-    setSelectedSantri(santri);
-    setSearchQuery(santri.namaSantri);
-    setIsDropdownOpen(false);
-  };
+  const unrecordedCount = useMemo(() => {
+    return baseFilteredSantri.filter(
+      (s) => !findExistingSholatRecordForDate(sholatList, tanggal, s.namaSantri)
+    ).length;
+  }, [baseFilteredSantri, sholatList, tanggal]);
 
-  // Fungsi klik utama waktu sholat:
-  // Jika masih TEPAT -> ubah menjadi TELAT (dan dikunci otomatis sebagai TELAT).
-  // Jika sudah TELAT -> tetap TELAT (dikunci otomatis agar bila diklik lagi di waktu sholat yang sama tetap TELAT).
-  const handleSelectTelatAndLock = (
-    key: PrayerKey,
-    setter: React.Dispatch<React.SetStateAction<SholatStatus>>
-  ) => {
-    setter('TELAT');
-    setSavedLockedMap((prev) => ({ ...prev, [key]: true }));
-    setUnlockedPrayers((prev) => {
-      if (!prev.has(key)) return prev;
-      const next = new Set(prev);
-      next.delete(key);
+  const filteredSantri = useMemo(() => {
+    if (checklistMode === 'ALL') return baseFilteredSantri;
+    return baseFilteredSantri.filter(
+      (s) => !findExistingSholatRecordForDate(sholatList, tanggal, s.namaSantri)
+    );
+  }, [baseFilteredSantri, checklistMode, sholatList, tanggal]);
+
+  const selectedSantriList = useMemo(
+    () => Array.from(selectedSantriMap.values()),
+    [selectedSantriMap]
+  );
+
+  // Reset status buka-kunci jika tanggal berganti
+  useEffect(() => {
+    setUnlockedBySantri(new Map());
+  }, [tanggal]);
+
+  const toggleSelectSantri = (santri: MasterSantri) => {
+    const key = normalizeSantriKey(santri.namaSantri);
+    if (!key) return;
+    setSelectedSantriMap((prev) => {
+      const next = new Map(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.set(key, santri);
+      }
       return next;
     });
   };
 
-  // Fungsi khusus untuk membuka kunci dan mengubah kembali ke TEPAT
-  const handleUnlockToTepat = (
-    key: PrayerKey,
-    setter: React.Dispatch<React.SetStateAction<SholatStatus>>
-  ) => {
-    setter('TEPAT');
-    setSavedLockedMap((prev) => ({ ...prev, [key]: false }));
-    setUnlockedPrayers((prev) => {
-      const next = new Set(prev);
-      next.add(key);
+  const handleSelectAllFiltered = () => {
+    setSelectedSantriMap((prev) => {
+      const next = new Map(prev);
+      for (const s of filteredSantri) {
+        const key = normalizeSantriKey(s.namaSantri);
+        if (key) next.set(key, s);
+      }
       return next;
     });
   };
+
+  const handleClearAllSelected = () => {
+    setSelectedSantriMap(new Map());
+    setUnlockedBySantri(new Map());
+  };
+
+  const handleToggleBatchPrayer = (key: PrayerKey) => {
+    setBatchTelatPrayers((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleUnlockSantriPrayer = (
+    santriKey: string,
+    prayerKey: PrayerKey
+  ) => {
+    setUnlockedBySantri((prev) => {
+      const next = new Map(prev);
+      const currentSet = new Set(next.get(santriKey) || []);
+      if (currentSet.has(prayerKey)) {
+        currentSet.delete(prayerKey);
+      } else {
+        currentSet.add(prayerKey);
+      }
+      if (currentSet.size === 0) {
+        next.delete(santriKey);
+      } else {
+        next.set(santriKey, currentSet);
+      }
+      return next;
+    });
+  };
+
+  const computedBatchPreview = useMemo(() => {
+    return selectedSantriList.map((santri) => {
+      const santriKey = normalizeSantriKey(santri.namaSantri);
+      const existing = findExistingSholatRecordForDate(
+        sholatList,
+        tanggal,
+        santri.namaSantri
+      );
+      const unlockedSet = unlockedBySantri.get(santriKey) || new Set<PrayerKey>();
+
+      const getFinal = (pKey: PrayerKey): SholatStatus => {
+        const wasSavedTelat = existing?.[pKey] === 'TELAT';
+        const isUnlocked = unlockedSet.has(pKey);
+        if (wasSavedTelat && !isUnlocked) return 'TELAT';
+        if (batchTelatPrayers.has(pKey)) return 'TELAT';
+        if (existing && !isUnlocked && existing[pKey]) return existing[pKey];
+        return 'TEPAT';
+      };
+
+      return {
+        santri,
+        santriKey,
+        existing,
+        unlockedSet,
+        subuh: getFinal('subuh'),
+        dzuhur: getFinal('dzuhur'),
+        ashar: getFinal('ashar'),
+        maghrib: getFinal('maghrib'),
+        isya: getFinal('isya'),
+      };
+    });
+  }, [
+    selectedSantriList,
+    sholatList,
+    tanggal,
+    unlockedBySantri,
+    batchTelatPrayers,
+  ]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedSantri && !searchQuery.trim()) {
+    if (selectedSantriList.length === 0) {
       await Swal.fire({
         icon: 'warning',
-        title: 'Pilih Santri',
-        text: 'Silakan cari dan pilih santri terlebih dahulu.',
+        title: 'Pilih Santri Terlebih Dahulu',
+        text: 'Centang minimal 1 atau banyak nama santri yang akan dicatat.',
         confirmButtonColor: '#075e54',
       });
       return;
     }
 
-    const nama = selectedSantri
-      ? selectedSantri.namaSantri
-      : existingDayRecord
-      ? existingDayRecord.namaSantri
-      : searchQuery.trim();
-    const nis = selectedSantri
-      ? selectedSantri.idSantri
-      : existingDayRecord?.nis || '-';
-    const kelas = selectedSantri
-      ? selectedSantri.kelas
-      : existingDayRecord?.kelas || '-';
-    const gedung = existingDayRecord?.gedung || '-';
-    const kamar = selectedSantri
-      ? selectedSantri.kamar
-      : existingDayRecord?.kamar || '-';
-
-    const input: SholatInput = {
-      idSholat: existingDayRecord?.idSholat,
-      tanggal,
-      nis,
-      namaSantri: nama,
-      kelas,
-      gedung,
-      kamar,
-      subuh,
-      dzuhur,
-      ashar,
-      maghrib,
-      isya,
-      pencatat: activeMusyrifName,
-      unlockedPrayers: Array.from(unlockedPrayers),
-    };
-
-    const isUpdatingExisting = Boolean(existingDayRecord);
-    const syncResult = await onAddSholat(input);
-    setUnlockedPrayers(new Set());
-
-    if (syncResult && !syncResult.syncedToSheet) {
-      await Swal.fire({
-        icon: 'warning',
-        title: syncResult.needsGasUpdate
-          ? 'Tersimpan Lokal — Perbarui Code.gs Spreadsheet!'
-          : 'Tersimpan Lokal (Belum Sinkron ke Server)',
-        html: `<div class="text-xs text-slate-600 space-y-2 text-left">
-          <p>Data <b>${nama}</b> (${tanggal}) sudah tercatat di perangkat Anda, <b>namun belum terbaca oleh admin/ustadz lain</b>.</p>
-          ${
-            syncResult.needsGasUpdate
-              ? `<p class="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-amber-900">
-                  <b>Penyebab:</b> Script <code>Code.gs</code> di Google Spreadsheet Anda masih versi lama sehingga belum memproses menu <code>Rekap_Sholat</code>.<br/>
-                  <b>Solusi:</b> Buka menu <b>⚙️ Koneksi Sheet &amp; Code.gs</b> → Salin Code.gs terbaru → tempel ke Apps Script Spreadsheet → klik <b>Deploy → Manage deployments → Edit → Version: New version → Deploy</b>.
-                </p>`
-              : `<p class="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-rose-900"><b>Detail:</b> ${syncResult.errorMessage || 'Gagal terhubung ke Google Sheets.'}</p>`
-          }
-        </div>`,
+    if (batchTelatPrayers.size === 0 && unlockedBySantri.size === 0) {
+      const confirmNoPrayer = await Swal.fire({
+        icon: 'question',
+        title: 'Belum Ada Sholat yang Ditandai Telat',
+        text: `Anda memilih ${selectedSantriList.length} santri, tetapi belum memilih waktu sholat yang telat. Lanjutkan simpan sebagai TEPAT?`,
+        showCancelButton: true,
+        confirmButtonText: 'Ya, Tetap Simpan',
+        cancelButtonText: 'Pilih Sholat Dulu',
         confirmButtonColor: '#075e54',
       });
-    } else {
+      if (!confirmNoPrayer.isConfirmed) return;
+    }
+
+    const batchInputs: SholatInput[] = computedBatchPreview.map((item) => ({
+      idSholat: item.existing?.idSholat,
+      tanggal,
+      nis: item.santri.idSantri || item.existing?.nis || '-',
+      namaSantri: item.santri.namaSantri,
+      kelas: item.santri.kelas || item.existing?.kelas || '-',
+      gedung: item.existing?.gedung || '-',
+      kamar: item.santri.kamar || item.existing?.kamar || '-',
+      subuh: item.subuh,
+      dzuhur: item.dzuhur,
+      ashar: item.ashar,
+      maghrib: item.maghrib,
+      isya: item.isya,
+      pencatat: activeMusyrifName,
+      unlockedPrayers: Array.from(item.unlockedSet),
+    }));
+
+    setIsSubmittingBatch(true);
+    try {
+      let syncedToSheet = true;
+      let errorMsg = '';
+
+      if (onAddSholatBatch) {
+        const res = await onAddSholatBatch(batchInputs);
+        if (res) {
+          syncedToSheet = res.syncedToSheet;
+          errorMsg = res.errorMessage || '';
+        }
+      } else {
+        for (const inp of batchInputs) {
+          const r = await onAddSholat(inp);
+          if (r && !r.syncedToSheet) {
+            syncedToSheet = false;
+            errorMsg = r.errorMessage || '';
+          }
+        }
+      }
+
+      const selectedPrayerLabels = PRAYER_META.filter((p) =>
+        batchTelatPrayers.has(p.key)
+      )
+        .map((p) => p.label)
+        .join(', ');
+
       await Swal.fire({
         icon: 'success',
-        title: isUpdatingExisting
-          ? 'Rekap Sholat Diperbarui & Dikunci!'
-          : 'Rekap Sholat Disimpan!',
-        html: `<div class="text-xs text-slate-600 space-y-1">
-          <p>Data keterlambatan sholat untuk <b>${nama}</b> pada tanggal <b>${tanggal}</b> berhasil disimpan (${activeMusyrifName}) dan disinkronkan ke Spreadsheet agar terbaca oleh seluruh admin &amp; ustadz.</p>
-          <p class="font-mono text-[11px] bg-slate-100 p-2 rounded-lg mt-1">
-            Subuh: <b>${subuh}</b> · Dzuhur: <b>${dzuhur}</b> · Ashar: <b>${ashar}</b> · Maghrib: <b>${maghrib}</b> · Isya: <b>${isya}</b>
+        title: `Berhasil Menyimpan ${batchInputs.length} Santri!`,
+        html: `<div class="text-xs text-slate-600 space-y-1.5 text-left">
+          <p>Rekap keterlambatan tanggal <b>${tanggal}</b> untuk <b>${batchInputs.length} santri</b> telah tersimpan ke <b>Database Cloud</b> (${activeMusyrifName}).</p>
+          ${
+            selectedPrayerLabels
+              ? `<p class="bg-rose-50 text-rose-800 border border-rose-200 rounded-lg p-2 font-semibold">Sholat ditandai TELAT: ${selectedPrayerLabels}</p>`
+              : ''
+          }
+          <p class="text-[11px] ${
+            syncedToSheet ? 'text-emerald-700' : 'text-amber-700'
+          }">
+            ${
+              syncedToSheet
+                ? '✅ Mirror ke Google Spreadsheet aktif di latar belakang.'
+                : `ℹ️ Tersimpan di Database Cloud (Mirror Spreadsheet: ${errorMsg || 'menunggu sinkronisasi'}).`
+            }
           </p>
         </div>`,
         confirmButtonColor: '#075e54',
-        timer: 2400,
+        timer: 2500,
       });
-    }
 
-    // Reset form
-    setSearchQuery('');
-    setSelectedSantri(null);
-    setSubuh('TEPAT');
-    setDzuhur('TEPAT');
-    setAshar('TEPAT');
-    setMaghrib('TEPAT');
-    setIsya('TEPAT');
-    setSavedLockedMap({
-      subuh: false,
-      dzuhur: false,
-      ashar: false,
-      maghrib: false,
-      isya: false,
-    });
-    setSubTab('rekap');
+      setSelectedSantriMap(new Map());
+      setBatchTelatPrayers(new Set());
+      setUnlockedBySantri(new Map());
+      setSearchQuery('');
+      if (!stayOnInputAfterSave) {
+        setSubTab('rekap');
+      }
+    } finally {
+      setIsSubmittingBatch(false);
+    }
   };
 
   const dateFilteredList = filterSholatByDateRange(sholatList, dateRange);
+
+  const rekapKelasOptions = useMemo(() => {
+    const set = new Set<string>(kelasOptions);
+    for (const r of dateFilteredList) {
+      const k = String(r.kelas || '').trim();
+      if (k && k !== '-') set.add(k);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [kelasOptions, dateFilteredList]);
+
+  const rekapKamarOptions = useMemo(() => {
+    const set = new Set<string>(kamarOptions);
+    for (const r of dateFilteredList) {
+      const km = String(r.kamar || '').trim();
+      if (km && km !== '-') set.add(km);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [kamarOptions, dateFilteredList]);
+
+  const rekapFilteredList = useMemo(() => {
+    return dateFilteredList.filter((r) => {
+      if (rekapKelas !== 'ALL' && String(r.kelas || '').trim() !== rekapKelas) {
+        return false;
+      }
+      if (rekapKamar !== 'ALL' && String(r.kamar || '').trim() !== rekapKamar) {
+        return false;
+      }
+      return true;
+    });
+  }, [dateFilteredList, rekapKelas, rekapKamar]);
+
   const activeDateFilteredList = useMemo(
-    () => dateFilteredList.filter((r) => !isSholatRowPutih(r)),
-    [dateFilteredList]
+    () => rekapFilteredList.filter((r) => !isSholatRowPutih(r)),
+    [rekapFilteredList]
   );
   const diputihkanCount =
-    dateFilteredList.length - activeDateFilteredList.length;
+    rekapFilteredList.length - activeDateFilteredList.length;
   const isDateFiltered =
     dateRange.startDate.trim() !== '' || dateRange.endDate.trim() !== '';
+  const isRekapFiltered =
+    isDateFiltered || rekapKelas !== 'ALL' || rekapKamar !== 'ALL';
 
   const sholatStats = useMemo(() => {
     let subuhTelat = 0;
@@ -374,7 +551,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
   const santriSummaryList: SantriSholatSummary[] = useMemo(() => {
     const map = new Map<string, SantriSholatSummary>();
 
-    for (const row of dateFilteredList) {
+    for (const row of rekapFilteredList) {
       const key = row.namaSantri.toLowerCase().trim();
       const isPutih = isSholatRowPutih(row);
       if (!map.has(key)) {
@@ -439,11 +616,11 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
     return Array.from(map.values()).sort(
       (a, b) => b.totalTelat - a.totalTelat
     );
-  }, [dateFilteredList]);
+  }, [rekapFilteredList]);
 
   const pencatatBySantri = useMemo(() => {
     const map = new Map<string, string[]>();
-    for (const row of dateFilteredList) {
+    for (const row of rekapFilteredList) {
       const key = row.namaSantri.toLowerCase().trim();
       const raw = String(row.pencatat || '').trim();
       if (!raw) continue;
@@ -457,7 +634,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
       }
     }
     return map;
-  }, [dateFilteredList]);
+  }, [rekapFilteredList]);
 
   // Pastikan pilihan santri ekspor otomatis terisi bila mode SINGLE dipilih
   useEffect(() => {
@@ -507,7 +684,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
 
     const res = exportSholatToExcel({
       summaries: santriSummaryList,
-      dailyRows: dateFilteredList,
+      dailyRows: rekapFilteredList,
       startDate: dateRange.startDate,
       endDate: dateRange.endDate,
       mode: modeToUse,
@@ -550,7 +727,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
 
     const res = await exportSholatToPdf({
       summaries: santriSummaryList,
-      dailyRows: dateFilteredList,
+      dailyRows: rekapFilteredList,
       startDate: dateRange.startDate,
       endDate: dateRange.endDate,
       mode: modeToUse,
@@ -670,55 +847,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
     }
   };
 
-  const prayerItems: Array<{
-    key: PrayerKey;
-    label: string;
-    icon: string;
-    value: SholatStatus;
-    setter: React.Dispatch<React.SetStateAction<SholatStatus>>;
-    wasSavedTelat: boolean;
-  }> = [
-    {
-      key: 'subuh',
-      label: 'Subuh',
-      icon: '🌅',
-      value: subuh,
-      setter: setSubuh,
-      wasSavedTelat: existingDayRecord?.subuh === 'TELAT',
-    },
-    {
-      key: 'dzuhur',
-      label: 'Dzuhur',
-      icon: '☀️',
-      value: dzuhur,
-      setter: setDzuhur,
-      wasSavedTelat: existingDayRecord?.dzuhur === 'TELAT',
-    },
-    {
-      key: 'ashar',
-      label: 'Ashar',
-      icon: '🌤️',
-      value: ashar,
-      setter: setAshar,
-      wasSavedTelat: existingDayRecord?.ashar === 'TELAT',
-    },
-    {
-      key: 'maghrib',
-      label: 'Maghrib',
-      icon: '🌆',
-      value: maghrib,
-      setter: setMaghrib,
-      wasSavedTelat: existingDayRecord?.maghrib === 'TELAT',
-    },
-    {
-      key: 'isya',
-      label: 'Isya',
-      icon: '🌙',
-      value: isya,
-      setter: setIsya,
-      wasSavedTelat: existingDayRecord?.isya === 'TELAT',
-    },
-  ];
+  // Badge ringkas status sholat pada tabel rekap harian
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -758,24 +887,25 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                 : 'text-white hover:bg-white/10'
             }`}
           >
-            📋 Data Rekap &amp; Ekspor ({dateFilteredList.length})
+            📋 Data Rekap &amp; Ekspor ({rekapFilteredList.length})
           </button>
         </div>
       </div>
 
       {subTab === 'input' ? (
-        /* TAB 1: FORM INPUT KETERLAMBATAN SHOLAT (Dengan Penguncian Otomatis) */
+        /* TAB 1: FORM INPUT MASSAL (Pilih Banyak Nama Dulu -> Klik 1/Beberapa Sholat Telat) */
         <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/90 space-y-5">
           <div className="border-b border-slate-100 pb-3">
             <h3 className="text-sm font-bold text-slate-800">
-              Formulir Input Keterlambatan Sholat Santri
+              Input Cepat Keterlambatan Sholat (Pilih Banyak Nama Sekaligus)
             </h3>
-            <p className="text-xs text-slate-500">
-              Pilih tanggal dan nama santri. Jika di tanggal yang sama santri sudah tercatat <strong>TELAT</strong> pada waktu sholat sebelumnya, statusnya otomatis tertulis <strong>TELAT (Terkunci)</strong> agar tidak berubah saat input waktu sholat berikutnya, namun tetap bisa diubah ke <strong>TEPAT</strong>.
+            <p className="text-xs text-slate-500 mt-0.5">
+              <strong>Langkah 1:</strong> Pilih banyak nama santri yang terlambat.{' '}
+              <strong>Langkah 2:</strong> Klik 1 atau beberapa waktu sholat yang telat untuk seluruh santri terpilih. Status <strong>TELAT</strong> sebelumnya pada tanggal sama tetap dikunci otomatis.
             </p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-5">
             {/* Tanggal & Pencatat */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
@@ -802,208 +932,398 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
               </div>
             </div>
 
-            {/* Pencarian Santri (Drawer / Autocomplete) */}
-            <div className="relative" ref={dropdownRef}>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Cari Nama Santri
-              </label>
-              <div className="relative">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => {
-                    setSearchQuery(e.target.value);
-                    setIsDropdownOpen(true);
-                    setSelectedSantri(null);
-                  }}
-                  onFocus={() => setIsDropdownOpen(true)}
-                  placeholder="Ketik nama santri atau kelas..."
-                  className="w-full rounded-xl border border-slate-300 bg-white pl-9 pr-3 py-2.5 text-xs text-slate-800 focus:border-[#00a884] focus:outline-none focus:ring-2 focus:ring-[#00a884]/20"
-                />
+            {/* LANGKAH 1: PILIH BANYAK NAMA SANTRI */}
+            <div className="rounded-2xl bg-stone-50 border border-slate-200/90 p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-bold text-slate-800">
+                    1️⃣ Pilih Banyak Nama Santri ({selectedSantriList.length} Terpilih)
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    Centang nama santri di bawah ini (bisa filter per kelas/kamar atau cari nama).
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {filteredSantri.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleSelectAllFiltered}
+                      className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-[11px] font-semibold transition cursor-pointer"
+                    >
+                      Pilih Semua Tampil ({filteredSantri.length})
+                    </button>
+                  )}
+                  {selectedSantriList.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleClearAllSelected}
+                      className="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-semibold transition cursor-pointer"
+                    >
+                      Kosongkan ({selectedSantriList.length})
+                    </button>
+                  )}
+                </div>
               </div>
 
-              {isDropdownOpen && filteredSantri.length > 0 && (
-                <div className="absolute z-20 left-0 right-0 mt-1 max-h-56 overflow-y-auto bg-white rounded-2xl shadow-xl border border-slate-200 p-1 space-y-1">
-                  {filteredSantri.map((santri) => {
+              {/* Filter Cari Nama, Kelas, Kamar */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="relative sm:col-span-1">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Cari nama santri..."
+                    className="w-full rounded-xl border border-slate-300 bg-white pl-9 pr-3 py-2 text-xs text-slate-800 focus:border-[#00a884] focus:outline-none focus:ring-2 focus:ring-[#00a884]/20"
+                  />
+                </div>
+                <select
+                  value={filterKelas}
+                  onChange={(e) => setFilterKelas(e.target.value)}
+                  className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#00a884] focus:outline-none"
+                >
+                  <option value="ALL">Semua Kelas ({kelasOptions.length})</option>
+                  {kelasOptions.map((kls) => (
+                    <option key={kls} value={kls}>
+                      Kelas {kls}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={filterKamar}
+                  onChange={(e) => setFilterKamar(e.target.value)}
+                  className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#00a884] focus:outline-none"
+                >
+                  <option value="ALL">Semua Asrama / Kamar ({kamarOptions.length})</option>
+                  {kamarOptions.map((kmr) => (
+                    <option key={kmr} value={kmr}>
+                      {kmr}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Mode Tampilan Checklist: Semua vs Belum Dicatat Hari Ini */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                <div className="inline-flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setChecklistMode('ALL')}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                      checklistMode === 'ALL'
+                        ? 'bg-[#075e54] text-white'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Semua Santri ({baseFilteredSantri.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setChecklistMode('UNRECORDED')}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                      checklistMode === 'UNRECORDED'
+                        ? 'bg-[#075e54] text-white'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Belum Dicatat Tgl Ini ({unrecordedCount})
+                  </button>
+                </div>
+                <span className="text-[10px] text-slate-500">
+                  Lencana otomatis muncul jika santri sedang 🏠 Izin Pulang / 🏥 Lapor Sakit
+                </span>
+              </div>
+
+              {/* Daftar Checklist Santri */}
+              <div className="max-h-64 overflow-y-auto bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100">
+                {filteredSantri.length === 0 ? (
+                  <p className="p-4 text-center text-xs text-slate-500">
+                    Tidak ada santri yang cocok dengan pencarian/filter.
+                  </p>
+                ) : (
+                  filteredSantri.map((santri) => {
+                    const key = normalizeSantriKey(santri.namaSantri);
+                    const isChecked = selectedSantriMap.has(key);
                     const existingForItem = findExistingSholatRecordForDate(
                       sholatList,
                       tanggal,
                       santri.namaSantri
                     );
+                    const statusBadge = santriStatusBadgesMap.get(key);
+                    const lockedLabels = existingForItem
+                      ? PRAYER_META.filter(
+                          (p) => existingForItem[p.key] === 'TELAT'
+                        ).map((p) => p.label)
+                      : [];
+
                     return (
                       <button
                         key={santri.idSantri || santri.namaSantri}
                         type="button"
-                        onClick={() => handleSelectSantri(santri)}
-                        className="w-full text-left px-3 py-2 rounded-xl hover:bg-emerald-50 transition text-xs flex items-center justify-between cursor-pointer"
+                        onClick={() => toggleSelectSantri(santri)}
+                        className={`w-full text-left px-3.5 py-2.5 flex items-center justify-between gap-3 transition cursor-pointer ${
+                          isChecked
+                            ? 'bg-emerald-50/90 hover:bg-emerald-100/70'
+                            : 'hover:bg-slate-50'
+                        }`}
                       >
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <p className="font-bold text-slate-900">
-                              {santri.namaSantri}
-                            </p>
-                            {existingForItem && (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold">
-                                🔒 Sudah Ada Input Tgl {tanggal}
+                        <div className="flex items-center gap-3 min-w-0">
+                          {isChecked ? (
+                            <CheckSquare className="w-4 h-4 text-[#075e54] shrink-0" />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-400 shrink-0" />
+                          )}
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="text-xs font-bold text-slate-900 truncate">
+                                {santri.namaSantri}
                               </span>
-                            )}
+                              {statusBadge?.isIzinPulang && (
+                                <span
+                                  title={`Izin: ${statusBadge.izinDetail}`}
+                                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-blue-100 text-blue-900 border border-blue-300 text-[10px] font-bold"
+                                >
+                                  🏠 Izin Pulang
+                                </span>
+                              )}
+                              {statusBadge?.isSakit && (
+                                <span
+                                  title={`Keluhan: ${statusBadge.keluhan}`}
+                                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-orange-100 text-orange-900 border border-orange-300 text-[10px] font-bold"
+                                >
+                                  🏥 Lapor Sakit
+                                </span>
+                              )}
+                              {lockedLabels.length > 0 && (
+                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-bold">
+                                  <Lock className="w-2.5 h-2.5" />
+                                  <span>{lockedLabels.join(', ')} Telat</span>
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-slate-500">
+                              Kelas {santri.kelas || '-'} · {santri.kamar || '-'}
+                            </p>
                           </div>
-                          <p className="text-[10px] text-slate-500">
-                            Kelas {santri.kelas} · Kamar {santri.kamar}
-                          </p>
                         </div>
-                        <span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md">
-                          ID: {santri.idSantri}
+                        <span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md shrink-0">
+                          {santri.idSantri || '-'}
                         </span>
                       </button>
                     );
-                  })}
-                </div>
-              )}
+                  })
+                )}
+              </div>
 
-              {selectedSantri && (
-                <div className="mt-2 rounded-xl bg-emerald-50/80 border border-emerald-200 p-3 text-xs flex items-center justify-between">
-                  <div>
-                    <p className="font-bold text-emerald-900">
-                      Terpilih: {selectedSantri.namaSantri}
-                    </p>
-                    <p className="text-[11px] text-emerald-700">
-                      Kelas {selectedSantri.kelas} · Asrama/Kamar{' '}
-                      {selectedSantri.kamar}
-                    </p>
+              {/* Chips Daftar Santri Terpilih */}
+              {selectedSantriList.length > 0 && (
+                <div className="pt-1">
+                  <p className="text-[11px] font-bold text-emerald-900 mb-1.5">
+                    Santri Terpilih ({selectedSantriList.length}):
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                    {selectedSantriList.map((s) => (
+                      <span
+                        key={s.namaSantri}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-100 text-emerald-900 border border-emerald-300 text-[11px] font-semibold"
+                      >
+                        <span>{s.namaSantri}</span>
+                        <span className="text-[10px] text-emerald-700">
+                          ({s.kelas || '-'})
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => toggleSelectSantri(s)}
+                          className="text-emerald-800 hover:text-rose-700 cursor-pointer"
+                          title={`Hapus ${s.namaSantri}`}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedSantri(null);
-                      setSearchQuery('');
-                    }}
-                    className="text-xs font-semibold text-emerald-800 hover:text-emerald-950 underline cursor-pointer"
-                  >
-                    Ganti Santri
-                  </button>
                 </div>
               )}
             </div>
 
-            {/* Banner Informasi Penguncian Otomatis jika di tanggal yang sama sudah ada data */}
-            {existingDayRecord && (
-              <div className="rounded-2xl bg-amber-50 border border-amber-200/90 p-3.5 text-xs text-amber-950 flex items-start gap-2.5">
-                <Lock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <p className="font-bold">
-                    Data {existingDayRecord.namaSantri} pada Tanggal {tanggal} Ditemukan (Otomatis Terkunci)
+            {/* LANGKAH 2: KLIK 1 ATAU BEBERAPA SHOLAT YANG TELAT UNTUK SEMUA NAMA TERPILIH */}
+            <div className="rounded-2xl bg-stone-50 border border-slate-200/90 p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-bold text-slate-800">
+                    2️⃣ Klik Sholat yang Telat untuk Semua Santri Terpilih
                   </p>
-                  <p className="text-[11px] font-semibold text-amber-900">
-                    👤 Dicatat sebelumnya oleh: <span className="underline">{existingDayRecord.pencatat || 'Admin'}</span>
-                  </p>
-                  <p className="text-[11px] text-amber-800 leading-relaxed">
-                    Waktu sholat yang sebelumnya sudah diinput <strong>TELAT</strong> pada tanggal ini otomatis tertulis <strong>TELAT &amp; Terkunci</strong> agar tetap <strong>TELAT</strong> saat Anda menginput waktu sholat lainnya. Jika ingin mengoreksi ke <strong>TEPAT</strong>, klik tombol <strong>&ldquo;Ubah ke Tepat&rdquo;</strong> di bawah waktu sholat terkait.
+                  <p className="text-[11px] text-slate-500">
+                    Bisa pilih 1 waktu sholat atau lebih (misal Subuh saja, atau Subuh + Maghrib).
                   </p>
                 </div>
-              </div>
-            )}
-
-            {/* Status 5 Waktu Sholat (Dengan Sistem Penguncian Otomatis) */}
-            <div className="rounded-2xl bg-stone-50 border border-slate-200/80 p-4 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs font-bold text-slate-800">
-                  Status Sholat 5 Waktu (Klik untuk Tandai Telat &amp; Kunci Otomatis):
-                </p>
-                <span className="text-[10px] text-slate-500">
-                  Status TELAT otomatis terkunci · Klik &ldquo;Ubah ke Tepat&rdquo; untuk membuka
-                </span>
+                {batchTelatPrayers.size > 0 && (
+                  <span className="px-2.5 py-1 rounded-lg bg-rose-100 text-rose-800 border border-rose-200 text-[11px] font-bold">
+                    {batchTelatPrayers.size} Sholat Dipilih Telat
+                  </span>
+                )}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
-                {prayerItems.map((item) => {
-                  const isTelat = item.value === 'TELAT';
-                  const isLocked = savedLockedMap[item.key] || isTelat;
-
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+                {PRAYER_META.map((item) => {
+                  const isSelectedTelat = batchTelatPrayers.has(item.key);
                   return (
-                    <div
+                    <button
                       key={item.key}
-                      className={`rounded-2xl p-2.5 border transition flex flex-col justify-between gap-2 ${
-                        isTelat
-                          ? 'bg-rose-50/70 border-rose-300 shadow-xs'
-                          : 'bg-white border-slate-200/90'
+                      type="button"
+                      onClick={() => handleToggleBatchPrayer(item.key)}
+                      className={`rounded-2xl p-3 border text-center transition cursor-pointer flex flex-col items-center justify-center gap-1.5 min-h-[78px] ${
+                        isSelectedTelat
+                          ? 'bg-rose-600 text-white border-rose-700 shadow-sm'
+                          : 'bg-white hover:bg-rose-50 text-slate-800 border-slate-200'
                       }`}
                     >
-                      <div className="flex items-center justify-between">
-                        <label className="text-[11px] font-bold text-slate-800">
-                          {item.icon} {item.label}
-                        </label>
-                        {item.wasSavedTelat && isTelat && (
-                          <span
-                            className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300"
-                            title="Sudah tercatat TELAT sebelumnya di tanggal ini"
-                          >
-                            <Lock className="w-2.5 h-2.5" />
-                            <span>Tersimpan</span>
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Tombol Utama: Jika diklik saat TEPAT -> jadi TELAT (Terkunci). Jika diklik saat sudah TELAT -> tetap TELAT (Terkunci) */}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handleSelectTelatAndLock(item.key, item.setter)
-                        }
-                        className={`w-full min-h-[42px] px-3 py-2 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
-                          isTelat
-                            ? 'bg-rose-600 text-white border-rose-700 shadow-xs'
-                            : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
+                      <span className="text-lg">{item.icon}</span>
+                      <span className="text-xs font-bold">{item.label}</span>
+                      <span
+                        className={`text-[10px] font-semibold px-2 py-0.5 rounded-md ${
+                          isSelectedTelat
+                            ? 'bg-white/20 text-white'
+                            : 'bg-slate-100 text-slate-600'
                         }`}
                       >
-                        {isTelat ? (
-                          <>
-                            <Lock className="w-3.5 h-3.5 shrink-0" />
-                            <span>TELAT (Terkunci)</span>
-                          </>
-                        ) : (
-                          <span>✅ Tepat Waktu</span>
-                        )}
-                      </button>
-
-                      {/* Tombol Ubah ke Tepat (Hanya muncul saat status TELAT / Terkunci) */}
-                      {isTelat && isLocked ? (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleUnlockToTepat(item.key, item.setter)
-                          }
-                          className="w-full py-1.5 px-2 rounded-lg bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 text-[10px] font-bold transition flex items-center justify-center gap-1 cursor-pointer"
-                        >
-                          <Unlock className="w-3 h-3 shrink-0" />
-                          <span>Ubah ke Tepat</span>
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleSelectTelatAndLock(item.key, item.setter)
-                          }
-                          className="w-full py-1.5 px-2 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-semibold transition flex items-center justify-center gap-1 cursor-pointer"
-                        >
-                          <span>⚠️ Tandai Telat</span>
-                        </button>
-                      )}
-                    </div>
+                        {isSelectedTelat ? '⚠️ TELAT' : 'Klik jika Telat'}
+                      </span>
+                    </button>
                   );
                 })}
               </div>
             </div>
 
+            {/* LANGKAH 3: PRATINJAU STATUS & BUKA KUNCI (JIKA ADA KOREKSI PER ANAK) */}
+            {computedBatchPreview.length > 0 && (
+              <div className="rounded-2xl bg-amber-50/70 border border-amber-200/90 p-4 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5 text-amber-700" />
+                    <span>
+                      Pratinjau Status Final ({computedBatchPreview.length} Santri · Tgl {tanggal})
+                    </span>
+                  </p>
+                  <span className="text-[10px] text-amber-800">
+                    Klik 🔒 pada sholat yang terkunci jika ingin ubah kembali ke TEPAT
+                  </span>
+                </div>
+
+                <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                  {computedBatchPreview.map((item) => {
+                    const statusBadge = santriStatusBadgesMap.get(item.santriKey);
+                    return (
+                      <div
+                        key={item.santriKey}
+                        className="bg-white rounded-xl border border-amber-200/80 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px]"
+                      >
+                        <div className="min-w-0 flex flex-wrap items-center gap-1.5">
+                          <span className="font-bold text-slate-900">
+                            {item.santri.namaSantri}
+                          </span>
+                          <span className="text-slate-500">
+                            ({item.santri.kelas || '-'})
+                          </span>
+                          {statusBadge?.isIzinPulang && (
+                            <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-900 border border-blue-200 text-[10px] font-bold">
+                              🏠 Izin Pulang
+                            </span>
+                          )}
+                          {statusBadge?.isSakit && (
+                            <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-900 border border-orange-200 text-[10px] font-bold">
+                              🏥 Sakit
+                            </span>
+                          )}
+                          {item.existing?.pencatat && (
+                            <span className="text-[10px] text-amber-800">
+                              · Pencatat sblm: {item.existing.pencatat}
+                            </span>
+                          )}
+                        </div>
+
+                      <div className="flex flex-wrap items-center gap-1">
+                        {PRAYER_META.map((p) => {
+                          const finalVal = item[p.key];
+                          const wasLocked = item.existing?.[p.key] === 'TELAT';
+                          const isUnlocked = item.unlockedSet.has(p.key);
+                          if (wasLocked) {
+                            return (
+                              <button
+                                key={p.key}
+                                type="button"
+                                onClick={() =>
+                                  handleToggleUnlockSantriPrayer(
+                                    item.santriKey,
+                                    p.key
+                                  )
+                                }
+                                title={
+                                  isUnlocked
+                                    ? 'Klik untuk kunci kembali jadi TELAT'
+                                    : 'Sudah TELAT sebelumnya — klik untuk ubah ke TEPAT'
+                                }
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border transition cursor-pointer ${
+                                  isUnlocked
+                                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                    : 'bg-rose-100 text-rose-800 border-rose-300'
+                                }`}
+                              >
+                                {isUnlocked ? (
+                                  <Unlock className="w-2.5 h-2.5" />
+                                ) : (
+                                  <Lock className="w-2.5 h-2.5" />
+                                )}
+                                <span>
+                                  {p.label}: {finalVal}
+                                </span>
+                              </button>
+                            );
+                          }
+                          return (
+                            <span
+                              key={p.key}
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                finalVal === 'TELAT'
+                                  ? 'bg-rose-600 text-white'
+                                  : 'bg-slate-100 text-slate-500'
+                              }`}
+                            >
+                              {p.label.slice(0, 3)}: {finalVal === 'TELAT' ? 'TELAT' : '✓'}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <label className="flex items-center gap-2 text-xs text-slate-700 bg-emerald-50/70 border border-emerald-200/80 rounded-xl px-3.5 py-2.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={stayOnInputAfterSave}
+                onChange={(e) => setStayOnInputAfterSave(e.target.checked)}
+                className="w-4 h-4 accent-[#075e54] rounded cursor-pointer"
+              />
+              <span className="font-semibold">
+                Tetap di halaman input setelah simpan (langsung lanjut input kelompok/waktu sholat berikutnya)
+              </span>
+            </label>
+
             <button
               type="submit"
-              className="w-full min-h-[44px] rounded-xl bg-[#075e54] hover:bg-[#054c42] text-white text-xs font-bold transition flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+              disabled={isSubmittingBatch}
+              className="w-full min-h-[46px] rounded-xl bg-[#075e54] hover:bg-[#054c42] text-white text-xs font-bold transition flex items-center justify-center gap-2 shadow-sm cursor-pointer disabled:opacity-60"
             >
               <Plus className="w-4 h-4" />
               <span>
-                {existingDayRecord
-                  ? `Simpan Perubahan & Kunci Rekap (${existingDayRecord.namaSantri})`
+                {isSubmittingBatch
+                  ? 'Menyimpan ke Database Cloud...'
+                  : selectedSantriList.length > 0
+                  ? `Simpan Rekap untuk ${selectedSantriList.length} Santri Terpilih`
                   : 'Simpan Rekap Sholat Santri'}
               </span>
             </button>
@@ -1015,7 +1335,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
             <div>
               <h3 className="text-sm font-bold text-slate-800">
-                Data Rekap Keterlambatan Sholat ({dateFilteredList.length} Catatan{isDateFiltered && sholatList.length !== dateFilteredList.length ? ` dari ${sholatList.length} total` : ''})
+                Data Rekap Keterlambatan Sholat ({rekapFilteredList.length} Catatan{isRekapFiltered && sholatList.length !== rekapFilteredList.length ? ` dari ${sholatList.length} total` : ''})
               </h3>
               <p className="text-xs text-slate-500">
                 Menampilkan seluruh catatan dari semua Admin &amp; Ustadz · Sinkron terakhir: {lastSyncTime || '-'}
@@ -1079,17 +1399,19 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                     <span>{isSyncing ? 'Menarik Data...' : 'Tarik Data Rentang Ini'}</span>
                   </button>
                 )}
-                {isDateFiltered && (
+                {isRekapFiltered && (
                   <button
                     type="button"
                     onClick={() => {
                       onDateRangeChange({ startDate: '', endDate: '' });
+                      setRekapKelas('ALL');
+                      setRekapKamar('ALL');
                       onSilentSync?.();
                     }}
                     className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 flex items-center gap-1 cursor-pointer"
                   >
                     <RotateCcw className="w-3 h-3" />
-                    <span>Reset Tanggal</span>
+                    <span>Reset Filter</span>
                   </button>
                 )}
               </div>
@@ -1123,7 +1445,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
               })}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
               <div>
                 <label className="block text-[11px] font-medium text-slate-600 mb-1">
                   Dari Tanggal
@@ -1158,20 +1480,61 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                   className="w-full rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono tabular-nums text-slate-800"
                 />
               </div>
+              <div>
+                <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                  Filter Kelas
+                </label>
+                <select
+                  value={rekapKelas}
+                  onChange={(e) => setRekapKelas(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800"
+                >
+                  <option value="ALL">Semua Kelas ({rekapKelasOptions.length})</option>
+                  {rekapKelasOptions.map((kls) => (
+                    <option key={kls} value={kls}>
+                      Kelas {kls}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                  Filter Asrama / Kamar
+                </label>
+                <select
+                  value={rekapKamar}
+                  onChange={(e) => setRekapKamar(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800"
+                >
+                  <option value="ALL">Semua Asrama ({rekapKamarOptions.length})</option>
+                  {rekapKamarOptions.map((kmr) => (
+                    <option key={kmr} value={kmr}>
+                      {kmr}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
-            {isDateFiltered && (
+            {isRekapFiltered && (
               <div className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-amber-900">
                 <span>
-                  📅 Periode aktif: <strong>{periodeLabel}</strong> · Menampilkan <strong>{dateFilteredList.length}</strong> dari <strong>{sholatList.length}</strong> catatan di Spreadsheet.
+                  📅 Filter aktif: <strong>{periodeLabel}</strong>
+                  {rekapKelas !== 'ALL' ? ` · Kelas ${rekapKelas}` : ''}
+                  {rekapKamar !== 'ALL' ? ` · ${rekapKamar}` : ''} · Menampilkan{' '}
+                  <strong>{rekapFilteredList.length}</strong> dari <strong>{sholatList.length}</strong> catatan.
                 </span>
-                {sholatList.length > dateFilteredList.length && (
+                {sholatList.length > rekapFilteredList.length && (
                   <button
                     type="button"
-                    onClick={() => onDateRangeChange({ startDate: '', endDate: '' })}
+                    onClick={() => {
+                      onDateRangeChange({ startDate: '', endDate: '' });
+                      setRekapKelas('ALL');
+                      setRekapKamar('ALL');
+                    }}
                     className="font-bold text-amber-950 underline hover:text-emerald-800 cursor-pointer"
                   >
-                    Tampilkan Semua Tanggal ({sholatList.length})
+                    Tampilkan Semua ({sholatList.length})
                   </button>
                 )}
               </div>
@@ -1572,10 +1935,10 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
           )}
 
           {/* Tabel Data Sholat Harian */}
-          {dateFilteredList.length === 0 ? (
+          {rekapFilteredList.length === 0 ? (
             <div className="text-center py-8 px-4 text-xs text-slate-600 bg-stone-50 rounded-2xl border border-slate-200/70 space-y-3">
               <p>
-                Tidak ada data rekap sholat pada periode <strong>{periodeLabel}</strong>.
+                Tidak ada data rekap sholat pada filter/periode <strong>{periodeLabel}</strong>.
               </p>
               <div className="flex flex-wrap items-center justify-center gap-2">
                 {onPullByDateRange && (
@@ -1589,20 +1952,24 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                     <span>{isSyncing ? 'Menarik Data...' : 'Tarik Data Terbaru dari Sheet'}</span>
                   </button>
                 )}
-                {isDateFiltered && (
+                {isRekapFiltered && (
                   <button
                     type="button"
-                    onClick={() => onDateRangeChange({ startDate: '', endDate: '' })}
+                    onClick={() => {
+                      onDateRangeChange({ startDate: '', endDate: '' });
+                      setRekapKelas('ALL');
+                      setRekapKamar('ALL');
+                    }}
                     className="px-3.5 py-1.5 rounded-xl bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-semibold transition cursor-pointer"
                   >
-                    Tampilkan Semua Tanggal ({sholatList.length})
+                    Tampilkan Semua Data ({sholatList.length})
                   </button>
                 )}
               </div>
             </div>
           ) : (
             <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">
-              {dateFilteredList.map((row) => {
+              {rekapFilteredList.map((row) => {
                 const isPutih = isSholatRowPutih(row);
                 return (
                   <div

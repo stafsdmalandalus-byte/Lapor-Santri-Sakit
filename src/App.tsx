@@ -3,9 +3,46 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Swal from 'sweetalert2';
-import { UserCheck, Menu, X, BarChart3, MessageSquare, FileText, Home, Database, Settings, RefreshCw } from 'lucide-react';
+import { onAuthStateChanged, type User } from 'firebase/auth';
+import {
+  UserCheck,
+  Menu,
+  X,
+  FileText,
+  Home,
+  Database,
+  Settings,
+  RefreshCw,
+  Cloud,
+  LogOut,
+  ShieldCheck,
+} from 'lucide-react';
+import {
+  auth,
+  BOOTSTRAPPED_ADMIN_EMAIL,
+  signInWithGooglePopup,
+  signOutFirebase,
+} from './firebase';
+import {
+  buildAllowedEmails,
+  deleteLaporanFromFirestore,
+  deletePerizinanFromFirestore,
+  deleteSholatFromFirestore,
+  deleteStaffAccessEmail,
+  migrateSheetsSnapshotToFirestore,
+  resetSholatRangeInFirestore,
+  saveLaporanToFirestore,
+  saveMasterSantriToFirestore,
+  savePerizinanToFirestore,
+  saveSholatBatchToFirestore,
+  saveStaffAccessEmail,
+  saveUserRoleToFirestore,
+  subscribePortalCollections,
+  syncAllowedEmailsAcrossAllCollections,
+  type StaffAccessRow,
+} from './utils/firestoreSync';
 import {
   INITIAL_MASTER_DATA,
   INITIAL_LAPORAN_MUSYRIF,
@@ -44,6 +81,7 @@ import {
   upsertSholatRowInList,
   filterSholatByDateRange,
   getEffectiveSholatDate,
+  isSholatRowPutih,
   formatSholatDateID,
   type SholatRow,
   type SholatInput,
@@ -69,7 +107,7 @@ import {
   updatePerizinanTibaInGas,
   extendPerizinanInGas,
   deletePerizinanFromGas,
-  postSholatToGas,
+  postSholatBatchToGas,
   deleteSholatFromGas,
   resetSholatRangeInGas,
   type GasAllDataResponse,
@@ -91,25 +129,28 @@ export default function App() {
   const [adminTab, setAdminTab] = useState<AdminMenuTab>('hub');
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
 
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState<boolean>(false);
+  const [isLoggingInGoogle, setIsLoggingInGoogle] = useState<boolean>(false);
+  const [authErrorMsg, setAuthErrorMsg] = useState<string>('');
+  const [firestoreReady, setFirestoreReady] = useState<boolean>(false);
+  const [mirrorStatus, setMirrorStatus] = useState<
+    'idle' | 'syncing' | 'synced' | 'queued'
+  >('idle');
+  const [staffAccessList, setStaffAccessList] = useState<StaffAccessRow[]>([]);
+  const [staffAccessLoaded, setStaffAccessLoaded] = useState<boolean>(false);
+  const [isSyncingAccess, setIsSyncingAccess] = useState<boolean>(false);
+  const hasAutoMigratedRef = useRef<boolean>(false);
+
   const [gasWebAppUrl, setGasWebAppUrl] = useState<string>(() =>
     getSavedGasUrl()
   );
-  const [isSyncingGas, setIsSyncingGas] = useState<boolean>(() =>
-    Boolean(getSavedGasUrl())
-  );
+  const [isSyncingGas, setIsSyncingGas] = useState<boolean>(false);
 
-  const [masterData, setMasterData] = useState<MasterSantri[]>(() =>
-    getSavedGasUrl() ? [] : INITIAL_MASTER_DATA
-  );
-  const [laporanList, setLaporanList] = useState<LaporanMusyrifRow[]>(() =>
-    getSavedGasUrl() ? [] : INITIAL_LAPORAN_MUSYRIF
-  );
-  const [ukpList, setUkpList] = useState<DataUKPRow[]>(() =>
-    getSavedGasUrl() ? [] : INITIAL_DATA_UKP
-  );
-  const [usersRoleList, setUsersRoleList] = useState<UserRoleRow[]>(() =>
-    getSavedGasUrl() ? [] : INITIAL_USERS_ROLE
-  );
+  const [masterData, setMasterData] = useState<MasterSantri[]>([]);
+  const [laporanList, setLaporanList] = useState<LaporanMusyrifRow[]>([]);
+  const [ukpList, setUkpList] = useState<DataUKPRow[]>([]);
+  const [usersRoleList, setUsersRoleList] = useState<UserRoleRow[]>([]);
   const [perizinanList, setPerizinanList] = useState<PerizinanRow[]>(() =>
     getSavedPerizinanList(Boolean(getSavedGasUrl()))
   );
@@ -129,7 +170,91 @@ export default function App() {
   });
   const [autoTriggerEnabled, setAutoTriggerEnabled] = useState<boolean>(false);
 
-  // Fungsi menarik seluruh data sheet (Master_Data, Laporan_Musyrif, Data_UKP, users_role, Perizinan, Rekap_Sholat) dari Google Sheets
+  const isBootstrappedOrListedStaff = useMemo(() => {
+    const em = (firebaseUser?.email || '').trim().toLowerCase();
+    if (!em) return false;
+    if (em === BOOTSTRAPPED_ADMIN_EMAIL) return true;
+    return staffAccessList.some((s) => s.email.toLowerCase() === em);
+  }, [firebaseUser?.email, staffAccessList]);
+
+  const isAdminFirebaseUser = useMemo(() => {
+    const em = (firebaseUser?.email || '').trim().toLowerCase();
+    if (!em) return false;
+    if (em === BOOTSTRAPPED_ADMIN_EMAIL) return true;
+    return staffAccessList.some(
+      (s) =>
+        s.email.toLowerCase() === em &&
+        (s.role === 'admin_pusat' || s.role === 'admin_pengasuhan')
+    );
+  }, [firebaseUser?.email, staffAccessList]);
+
+  const allowedEmailsForDocs = useMemo(() => {
+    const expandedStaff = staffAccessList.flatMap((s) => [
+      s.email,
+      ...(s.allowedEmails || []),
+    ]);
+    return buildAllowedEmails(firebaseUser?.email, expandedStaff);
+  }, [firebaseUser?.email, staffAccessList]);
+
+  // Pantau status login Firebase Google
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setFirebaseUser(u);
+      setAuthReady(true);
+      if (!u) {
+        setFirestoreReady(false);
+        setStaffAccessLoaded(false);
+        hasAutoMigratedRef.current = false;
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // Langganan Real-Time ke Database Utama Firestore (cepat, <1 detik antar perangkat)
+  useEffect(() => {
+    const email = firebaseUser?.email;
+    const uid = firebaseUser?.uid;
+    if (!email || !uid) return;
+
+    const unsub = subscribePortalCollections({
+      userEmail: email,
+      userUid: uid,
+      onUpdate: (partial, ready) => {
+        if (partial.masterData !== undefined) {
+          setMasterData(partial.masterData);
+        }
+        if (partial.ukpList !== undefined) {
+          setUkpList(partial.ukpList);
+        }
+        if (partial.laporanList !== undefined) {
+          setLaporanList(partial.laporanList);
+        }
+        if (partial.usersRoleList !== undefined) {
+          setUsersRoleList(partial.usersRoleList);
+        }
+        if (partial.perizinanList !== undefined) {
+          setPerizinanList(partial.perizinanList);
+          savePerizinanListLocally(partial.perizinanList);
+        }
+        if (partial.sholatList !== undefined) {
+          setSholatList(partial.sholatList);
+          saveSholatListLocally(partial.sholatList);
+        }
+        if (partial.staffAccessList !== undefined) {
+          setStaffAccessList(partial.staffAccessList);
+          setStaffAccessLoaded(true);
+        }
+        if (ready) {
+          setFirestoreReady(true);
+          setLastSyncTime(formatTimestampID(new Date()));
+        }
+      },
+    });
+
+    return () => unsub();
+  }, [firebaseUser?.email, firebaseUser?.uid]);
+
+  // Fungsi menarik data dari Google Sheets lalu mengimpor ke Firestore (Mirror / Impor Manual)
   const pullFromGasSheets = useCallback(
     async (
       targetUrl: string,
@@ -170,16 +295,35 @@ export default function App() {
           setSholatList(res.sholatList);
           saveSholatListLocally(res.sholatList);
         }
+
+        // Impor otomatis ke Database Utama Firestore agar tersinkron di semua Admin
+        let migratedCount = 0;
+        if (firebaseUser?.uid && firebaseUser?.email) {
+          const migRes = await migrateSheetsSnapshotToFirestore({
+            masterData: res.masterData,
+            usersRoleList: res.usersRoleList,
+            laporanList: res.laporanList,
+            ukpList: res.ukpList,
+            perizinanList: res.perizinanList,
+            sholatList: res.sholatList,
+            uid: firebaseUser.uid,
+            userEmail: firebaseUser.email,
+            allowedEmails: allowedEmailsForDocs,
+            isAdminUser: isAdminFirebaseUser,
+          });
+          migratedCount = migRes.totalMigrated;
+        }
+
         setLastSyncTime(res.lastSyncTime || formatTimestampID(new Date()));
 
         if (showSuccessAlert) {
           await Swal.fire({
             icon: hasSholatList ? 'success' : 'warning',
             title: hasSholatList
-              ? 'Data Tersinkronisasi dengan Google Sheets!'
+              ? 'Data Spreadsheet & Cloud Tersinkronisasi!'
               : 'Sebagian Data Tersinkronisasi (Perbarui Code.gs)',
             html: `<div class="text-xs text-slate-600 space-y-1.5">
-              <p>Seluruh data terbaru dari semua Admin &amp; Musyrif telah ditarik:</p>
+              <p>Data terbaru berhasil ditarik dari Google Sheets &amp; disimpan ke Database Cloud (<b>${migratedCount}</b> item):</p>
               <p><b>Laporan Sakit:</b> ${res.laporanList?.length ?? 0} · <b>Perizinan:</b> ${res.perizinanList?.length ?? 0} · <b>Rekap Sholat:</b> ${hasSholatList ? (res.sholatList?.length ?? 0) : 'Belum terbaca'}</p>
               ${
                 !hasSholatList
@@ -192,15 +336,6 @@ export default function App() {
         }
         return res;
       } catch (err) {
-        // Fallback hanya jika benar-benar gagal koneksi dan state masih kosong
-        setMasterData((prev) => (prev.length === 0 ? INITIAL_MASTER_DATA : prev));
-        setLaporanList((prev) =>
-          prev.length === 0 ? INITIAL_LAPORAN_MUSYRIF : prev
-        );
-        setUkpList((prev) => (prev.length === 0 ? INITIAL_DATA_UKP : prev));
-        setUsersRoleList((prev) =>
-          prev.length === 0 ? INITIAL_USERS_ROLE : prev
-        );
         if (showSuccessAlert) {
           await Swal.fire({
             icon: 'error',
@@ -220,7 +355,12 @@ export default function App() {
         }
       }
     },
-    []
+    [
+      firebaseUser?.uid,
+      firebaseUser?.email,
+      allowedEmailsForDocs,
+      isAdminFirebaseUser,
+    ]
   );
 
   // Tarik data terbaru dari Google Sheets lalu tampilkan ringkasan sesuai rentang tanggal yang dipilih
@@ -314,45 +454,105 @@ export default function App() {
     [gasWebAppUrl, pullFromGasSheets, sholatList, perizinanList, laporanList]
   );
 
-  // Tarik otomatis saat pertama kali aplikasi dibuka bila URL Google Apps Script sudah tersimpan
+  // Migrasi awal 1 kali otomatis bila Firestore masih kosong namun URL Spreadsheet sudah tersambung
   useEffect(() => {
-    if (gasWebAppUrl) {
-      pullFromGasSheets(gasWebAppUrl, false, false);
+    if (!firestoreReady || !firebaseUser?.uid || hasAutoMigratedRef.current) {
+      return;
     }
-  }, [gasWebAppUrl, pullFromGasSheets]);
+    const isFirestoreEmpty =
+      masterData.length === 0 &&
+      sholatList.length === 0 &&
+      laporanList.length === 0 &&
+      perizinanList.length === 0;
 
-  // Sinkronisasi otomatis antar perangkat Admin (polling 15 detik + saat pindah tab / kembali ke jendela browser)
-  useEffect(() => {
-    if (!gasWebAppUrl) return;
-
-    const intervalId = setInterval(() => {
-      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
-        pullFromGasSheets(gasWebAppUrl, false, true);
+    if (isFirestoreEmpty) {
+      hasAutoMigratedRef.current = true;
+      if (gasWebAppUrl) {
+        void pullFromGasSheets(gasWebAppUrl, false, false);
+      } else if (isAdminFirebaseUser) {
+        setMasterData(INITIAL_MASTER_DATA);
+        setLaporanList(INITIAL_LAPORAN_MUSYRIF);
+        setUkpList(INITIAL_DATA_UKP);
+        setUsersRoleList(INITIAL_USERS_ROLE);
       }
-    }, 15000);
-
-    const handleWindowFocusOrVisible = () => {
-      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
-        pullFromGasSheets(gasWebAppUrl, false, true);
-      }
-    };
-
-    window.addEventListener('focus', handleWindowFocusOrVisible);
-    document.addEventListener('visibilitychange', handleWindowFocusOrVisible);
-
-    return () => {
-      clearInterval(intervalId);
-      window.removeEventListener('focus', handleWindowFocusOrVisible);
-      document.removeEventListener('visibilitychange', handleWindowFocusOrVisible);
-    };
-  }, [gasWebAppUrl, pullFromGasSheets]);
-
-  // Tarik data terbaru secara diam-diam setiap kali akun login, role berubah, atau berpindah tab
-  useEffect(() => {
-    if (gasWebAppUrl) {
-      pullFromGasSheets(gasWebAppUrl, false, true);
+    } else {
+      hasAutoMigratedRef.current = true;
     }
-  }, [adminTab, userRole, activeMusyrif, gasWebAppUrl, pullFromGasSheets]);
+  }, [
+    firestoreReady,
+    firebaseUser?.uid,
+    masterData.length,
+    sholatList.length,
+    laporanList.length,
+    perizinanList.length,
+    gasWebAppUrl,
+    pullFromGasSheets,
+    isAdminFirebaseUser,
+  ]);
+
+  const handleAddSholatBatch = async (
+    inputs: SholatInput[]
+  ): Promise<{
+    savedCount: number;
+    syncedToSheet: boolean;
+    needsGasUpdate?: boolean;
+    errorMessage?: string;
+  }> => {
+    if (inputs.length === 0) {
+      return { savedCount: 0, syncedToSheet: true };
+    }
+
+    const optimisticRows = inputs.map((inp) => createSholatRow(inp));
+    setSholatList((prev) => {
+      let next = prev;
+      for (const r of optimisticRows) {
+        next = upsertSholatRowInList(next, r);
+      }
+      saveSholatListLocally(next);
+      return next;
+    });
+
+    let rowsForMirror = optimisticRows;
+    if (firebaseUser?.uid) {
+      rowsForMirror = await saveSholatBatchToFirestore({
+        inputs,
+        existingSholatList: sholatList,
+        uid: firebaseUser.uid,
+        allowedEmails: allowedEmailsForDocs,
+      });
+      setLastSyncTime(formatTimestampID(new Date()));
+    }
+
+    if (!gasWebAppUrl) {
+      return {
+        savedCount: inputs.length,
+        syncedToSheet: false,
+        errorMessage: 'URL Spreadsheet belum terpasang (tersimpan di Database Cloud).',
+      };
+    }
+
+    // Mirror ke Google Sheets di latar belakang tanpa memblokir layar
+    setMirrorStatus('syncing');
+    void postSholatBatchToGas(
+      gasWebAppUrl,
+      rowsForMirror.map((row, idx) => ({
+        ...row,
+        unlockedPrayers: inputs[idx]?.unlockedPrayers,
+      }))
+    )
+      .then((res) => {
+        if (res.status === 'error') {
+          setMirrorStatus('queued');
+        } else {
+          setMirrorStatus('synced');
+        }
+      })
+      .catch(() => {
+        setMirrorStatus('queued');
+      });
+
+    return { savedCount: inputs.length, syncedToSheet: true };
+  };
 
   const handleAddSholat = async (
     input: SholatInput
@@ -361,46 +561,12 @@ export default function App() {
     needsGasUpdate?: boolean;
     errorMessage?: string;
   }> => {
-    const newRow = createSholatRow(input);
-    setSholatList((prev) => {
-      const updated = upsertSholatRowInList(prev, newRow);
-      saveSholatListLocally(updated);
-      return updated;
-    });
-    if (!gasWebAppUrl) {
-      return {
-        syncedToSheet: false,
-        errorMessage: 'URL Web App Google Apps Script belum terhubung.',
-      };
-    }
-    try {
-      const res = await postSholatToGas(gasWebAppUrl, {
-        ...newRow,
-        unlockedPrayers: input.unlockedPrayers,
-      });
-      if (res.status === 'error') {
-        return {
-          syncedToSheet: false,
-          errorMessage: res.message || 'Gagal menyimpan rekap sholat ke Google Sheets.',
-        };
-      }
-      if (Array.isArray(res.sholatList)) {
-        setSholatList(res.sholatList);
-        saveSholatListLocally(res.sholatList);
-        setLastSyncTime(formatTimestampID(new Date()));
-        return { syncedToSheet: true };
-      }
-      await pullFromGasSheets(gasWebAppUrl, false, true);
-      return { syncedToSheet: false, needsGasUpdate: true };
-    } catch (err) {
-      return {
-        syncedToSheet: false,
-        errorMessage:
-          err instanceof Error
-            ? err.message
-            : 'Koneksi ke Google Sheets gagal. Data baru tersimpan di perangkat ini.',
-      };
-    }
+    const res = await handleAddSholatBatch([input]);
+    return {
+      syncedToSheet: res.syncedToSheet,
+      needsGasUpdate: res.needsGasUpdate,
+      errorMessage: res.errorMessage,
+    };
   };
 
   const handleDeleteSholat = async (idSholat: string) => {
@@ -409,19 +575,17 @@ export default function App() {
       saveSholatListLocally(updated);
       return updated;
     });
+
+    if (firebaseUser?.uid) {
+      await deleteSholatFromFirestore(idSholat);
+      setLastSyncTime(formatTimestampID(new Date()));
+    }
+
     if (gasWebAppUrl) {
-      try {
-        const res = await deleteSholatFromGas(gasWebAppUrl, idSholat);
-        if (Array.isArray(res.sholatList)) {
-          setSholatList(res.sholatList);
-          saveSholatListLocally(res.sholatList);
-          setLastSyncTime(formatTimestampID(new Date()));
-        } else {
-          await pullFromGasSheets(gasWebAppUrl, false, true);
-        }
-      } catch {
-        // ignore
-      }
+      setMirrorStatus('syncing');
+      void deleteSholatFromGas(gasWebAppUrl, idSholat)
+        .then(() => setMirrorStatus('synced'))
+        .catch(() => setMirrorStatus('queued'));
     }
   };
 
@@ -431,6 +595,15 @@ export default function App() {
     keterangan: string
   ) => {
     const bounds = normalizeDateRangeBounds({ startDate: start, endDate: end });
+    const matchingRows = sholatList.filter((r) => {
+      if (isSholatRowPutih(r)) return false;
+      const tgl = getEffectiveSholatDate(r);
+      if (!tgl) return false;
+      if (bounds.start && tgl < bounds.start) return false;
+      if (bounds.end && tgl > bounds.end) return false;
+      return true;
+    });
+
     setSholatList((prev) => {
       const updated = prev.map((r) => {
         const tgl = getEffectiveSholatDate(r);
@@ -445,24 +618,25 @@ export default function App() {
       saveSholatListLocally(updated);
       return updated;
     });
+
+    if (firebaseUser?.uid && matchingRows.length > 0) {
+      await resetSholatRangeInFirestore(
+        matchingRows,
+        keterangan || 'DIPUTIHKAN'
+      );
+      setLastSyncTime(formatTimestampID(new Date()));
+    }
+
     if (gasWebAppUrl) {
-      try {
-        const res = await resetSholatRangeInGas(
-          gasWebAppUrl,
-          bounds.start,
-          bounds.end,
-          keterangan
-        );
-        if (Array.isArray(res.sholatList)) {
-          setSholatList(res.sholatList);
-          saveSholatListLocally(res.sholatList);
-          setLastSyncTime(formatTimestampID(new Date()));
-        } else {
-          await pullFromGasSheets(gasWebAppUrl, false, true);
-        }
-      } catch {
-        // ignore
-      }
+      setMirrorStatus('syncing');
+      void resetSholatRangeInGas(
+        gasWebAppUrl,
+        bounds.start,
+        bounds.end,
+        keterangan
+      )
+        .then(() => setMirrorStatus('synced'))
+        .catch(() => setMirrorStatus('queued'));
     }
   };
 
@@ -472,8 +646,8 @@ export default function App() {
     if (!newUrl) {
       await Swal.fire({
         icon: 'info',
-        title: 'Koneksi Google Sheets Diputuskan',
-        text: 'Aplikasi kembali menggunakan data lokal.',
+        title: 'Mirror Google Sheets Diputuskan',
+        text: 'Aplikasi tetap berjalan cepat menggunakan Database Cloud Firebase Firestore.',
         confirmButtonColor: '#0B4627',
       });
       return;
@@ -481,42 +655,35 @@ export default function App() {
     await pullFromGasSheets(newUrl, true);
   };
 
-  // Handler Submit Laporan Musyrif (Simpan ke Sheet Laporan_Musyrif bila terhubung)
+  // Handler Submit Laporan Musyrif (Simpan cepat ke Firestore, mirror latar belakang ke Sheet)
   const handleSubmitLaporan = async (
     input: LaporanInput
   ): Promise<{ idLaporan: string }> => {
-    if (gasWebAppUrl) {
-      try {
-        const res = await postLaporanToGas(gasWebAppUrl, input);
-        if (res.status === 'error') {
-          throw new Error(
-            res.message || 'Google Sheets menolak penyimpanan laporan.'
-          );
-        }
-        await pullFromGasSheets(gasWebAppUrl, false);
-        if (res.idLaporan) {
-          return { idLaporan: res.idLaporan };
-        }
-        throw new Error(
-          'Script Code.gs belum mengembalikan ID_Laporan. Pastikan Code.gs terbaru sudah di-deploy (New version).'
-        );
-      } catch (err) {
-        const nextSeq = laporanList.length + 1;
-        const localRow = createLaporanRow(input, nextSeq, new Date());
-        setLaporanList((prev) => [localRow, ...prev]);
-        throw new Error(
-          err instanceof Error
-            ? `Data tersimpan sementara di perangkat ini, namun GAGAL sinkron ke Google Sheets (${err.message}).`
-            : 'Data tersimpan sementara di perangkat ini, namun GAGAL sinkron ke Google Sheets.'
-        );
-      }
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 650));
     const nextSeq = laporanList.length + 1;
     const newRow = createLaporanRow(input, nextSeq, new Date());
 
     setLaporanList((prev) => [newRow, ...prev]);
+
+    if (firebaseUser?.uid) {
+      await saveLaporanToFirestore({
+        row: newRow,
+        uid: firebaseUser.uid,
+        allowedEmails: allowedEmailsForDocs,
+      });
+      setLastSyncTime(formatTimestampID(new Date()));
+    }
+
+    if (gasWebAppUrl) {
+      setMirrorStatus('syncing');
+      void postLaporanToGas(gasWebAppUrl, input)
+        .then((res) => {
+          setMirrorStatus(res.status === 'error' ? 'queued' : 'synced');
+        })
+        .catch(() => {
+          setMirrorStatus('queued');
+        });
+    }
+
     return { idLaporan: newRow.idLaporan };
   };
 
@@ -608,36 +775,67 @@ export default function App() {
 
   const handleAddMasterSantri = (newSantri: MasterSantri) => {
     setMasterData((prev) => [...prev, newSantri]);
+    if (firebaseUser?.uid) {
+      void saveMasterSantriToFirestore({
+        santri: newSantri,
+        uid: firebaseUser.uid,
+        allowedEmails: allowedEmailsForDocs,
+      });
+    }
     if (gasWebAppUrl) {
+      setMirrorStatus('syncing');
       postActionToGas(gasWebAppUrl, {
         action: 'addMasterSantri',
         ...newSantri,
-      }).catch(() => {});
+      })
+        .then(() => setMirrorStatus('synced'))
+        .catch(() => setMirrorStatus('queued'));
     }
   };
 
   const handleUpdateUserPassword = (namaUser: string, newPassword: string) => {
+    const existingUser = usersRoleList.find((u) => u.namaUser === namaUser);
     setUsersRoleList((prev) =>
       prev.map((u) =>
         u.namaUser === namaUser ? { ...u, password: newPassword } : u
       )
     );
+    if (firebaseUser?.uid && existingUser) {
+      void saveUserRoleToFirestore({
+        user: { ...existingUser, password: newPassword },
+        uid: firebaseUser.uid,
+        allowedEmails: allowedEmailsForDocs,
+      });
+    }
     if (gasWebAppUrl) {
+      setMirrorStatus('syncing');
       postActionToGas(gasWebAppUrl, {
         action: 'updateUserPassword',
         namaUser,
         newPassword,
-      }).catch(() => {});
+      })
+        .then(() => setMirrorStatus('synced'))
+        .catch(() => setMirrorStatus('queued'));
     }
   };
 
   const handleAddUserRole = (newUser: UserRoleRow) => {
     setUsersRoleList((prev) => [...prev, newUser]);
+    if (firebaseUser?.uid) {
+      void saveUserRoleToFirestore({
+        user: newUser,
+        uid: firebaseUser.uid,
+        allowedEmails: allowedEmailsForDocs,
+      });
+    }
     if (gasWebAppUrl) {
+      setMirrorStatus('syncing');
       postActionToGas(gasWebAppUrl, {
         action: 'addUserRole',
         ...newUser,
-      }).catch(() => {});
+      })
+        .then(() => setMirrorStatus('synced'))
+        .catch(() => setMirrorStatus('queued'));
     }
   };
 
@@ -667,7 +865,16 @@ export default function App() {
       prev.filter((item) => getLaporanRowKey(item) !== targetKey)
     );
 
-    await deleteLaporanFromGas(gasWebAppUrl, row);
+    if (firebaseUser?.uid) {
+      await deleteLaporanFromFirestore(row.idLaporan);
+    }
+
+    if (gasWebAppUrl) {
+      setMirrorStatus('syncing');
+      void deleteLaporanFromGas(gasWebAppUrl, row)
+        .then(() => setMirrorStatus('synced'))
+        .catch(() => setMirrorStatus('queued'));
+    }
 
     await Swal.fire({
       icon: 'success',
@@ -694,30 +901,22 @@ export default function App() {
       return updated;
     });
 
+    if (firebaseUser?.uid) {
+      await savePerizinanToFirestore({
+        row: newRow,
+        uid: firebaseUser.uid,
+        allowedEmails: allowedEmailsForDocs,
+      });
+      setLastSyncTime(formatTimestampID(new Date()));
+    }
+
     if (gasWebAppUrl) {
-      try {
-        const res = await postPerizinanToGas(gasWebAppUrl, newRow);
-        if (res.status === 'error') {
-          throw new Error(res.message || 'Gagal menyimpan izin ke Google Sheets.');
-        }
-        if (Array.isArray(res.perizinanList)) {
-          setPerizinanList(res.perizinanList);
-          savePerizinanListLocally(res.perizinanList);
-          setLastSyncTime(formatTimestampID(new Date()));
-        } else {
-          await pullFromGasSheets(gasWebAppUrl, false, true);
-        }
-      } catch (err) {
-        await Swal.fire({
-          icon: 'warning',
-          title: 'Belum Tersinkron ke Google Sheets',
-          text:
-            err instanceof Error
-              ? `Izin tersimpan di perangkat ini, namun gagal upload ke Spreadsheet (${err.message}). Admin lain belum bisa melihat sebelum sinkron.`
-              : 'Izin tersimpan di perangkat ini, namun gagal upload ke Spreadsheet.',
-          confirmButtonColor: '#0B4627',
-        });
-      }
+      setMirrorStatus('syncing');
+      void postPerizinanToGas(gasWebAppUrl, newRow)
+        .then((res) => {
+          setMirrorStatus(res.status === 'error' ? 'queued' : 'synced');
+        })
+        .catch(() => setMirrorStatus('queued'));
     }
 
     return newRow;
@@ -729,25 +928,33 @@ export default function App() {
     keteranganTiba: string
   ) => {
     const key = getPerizinanRowKey(targetRow);
+    const updatedRow = { ...targetRow, tibaTanggal, keteranganTiba };
     setPerizinanList((prev) => {
       const updated = prev.map((r) =>
-        getPerizinanRowKey(r) === key
-          ? { ...r, tibaTanggal, keteranganTiba }
-          : r
+        getPerizinanRowKey(r) === key ? updatedRow : r
       );
       savePerizinanListLocally(updated);
       return updated;
     });
 
+    if (firebaseUser?.uid) {
+      void savePerizinanToFirestore({
+        row: updatedRow,
+        uid: firebaseUser.uid,
+        allowedEmails: allowedEmailsForDocs,
+      });
+    }
+
     if (gasWebAppUrl) {
+      setMirrorStatus('syncing');
       updatePerizinanTibaInGas(
         gasWebAppUrl,
         targetRow,
         tibaTanggal,
         keteranganTiba
       )
-        .then(() => pullFromGasSheets(gasWebAppUrl, false, true))
-        .catch(() => {});
+        .then(() => setMirrorStatus('synced'))
+        .catch(() => setMirrorStatus('queued'));
     }
   };
 
@@ -773,10 +980,19 @@ export default function App() {
       return updated;
     });
 
+    if (firebaseUser?.uid) {
+      void savePerizinanToFirestore({
+        row: extendedRow,
+        uid: firebaseUser.uid,
+        allowedEmails: allowedEmailsForDocs,
+      });
+    }
+
     if (gasWebAppUrl) {
+      setMirrorStatus('syncing');
       extendPerizinanInGas(gasWebAppUrl, extendedRow)
-        .then(() => pullFromGasSheets(gasWebAppUrl, false, true))
-        .catch(() => {});
+        .then(() => setMirrorStatus('synced'))
+        .catch(() => setMirrorStatus('queued'));
     }
 
     return extendedRow;
@@ -808,12 +1024,245 @@ export default function App() {
       return updated;
     });
 
+    if (firebaseUser?.uid) {
+      await deletePerizinanFromFirestore(
+        targetRow.idPerizinan || `IZN_${targetRow.no}_${targetRow.dariTanggal}`
+      );
+    }
+
     if (gasWebAppUrl) {
+      setMirrorStatus('syncing');
       deletePerizinanFromGas(gasWebAppUrl, targetRow)
-        .then(() => pullFromGasSheets(gasWebAppUrl, false, true))
-        .catch(() => {});
+        .then(() => setMirrorStatus('synced'))
+        .catch(() => setMirrorStatus('queued'));
     }
   };
+
+  const handleGoogleSignIn = async () => {
+    setIsLoggingInGoogle(true);
+    setAuthErrorMsg('');
+    try {
+      await signInWithGooglePopup();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('unauthorized-domain')) {
+        setAuthErrorMsg(
+          'Domain belum terdaftar di Firebase Authentication (Authorized domains). Tambahkan domain Vercel ini di Firebase Console → Authentication → Settings → Authorized domains.'
+        );
+      } else if (!msg.includes('popup-closed-by-user')) {
+        setAuthErrorMsg(`Gagal masuk Google: ${msg}`);
+      }
+    } finally {
+      setIsLoggingInGoogle(false);
+    }
+  };
+
+  const handleAddStaffEmail = async (
+    email: string,
+    nama: string,
+    role: 'admin_pusat' | 'admin_pengasuhan' | 'user'
+  ) => {
+    if (!firebaseUser?.uid) return;
+    const nextAllowed = buildAllowedEmails(firebaseUser.email, [
+      ...allowedEmailsForDocs,
+      email,
+    ]);
+    setIsSyncingAccess(true);
+    try {
+      await saveStaffAccessEmail({
+        email,
+        nama,
+        role,
+        uid: firebaseUser.uid,
+        allowedEmails: nextAllowed,
+      });
+      const { updatedCount } = await syncAllowedEmailsAcrossAllCollections({
+        allowedEmails: nextAllowed,
+        userEmail: firebaseUser.email || BOOTSTRAPPED_ADMIN_EMAIL,
+      });
+      await Swal.fire({
+        icon: 'success',
+        title: 'Akses Gmail Tim Ditambahkan!',
+        html: `<div class="text-xs text-slate-600 space-y-1">
+          <p><b>${email}</b> kini resmi diizinkan login.</p>
+          <p>Hak akses <b>${updatedCount}</b> data Cloud lama &amp; baru langsung disinkronkan otomatis agar bisa dibaca dari email tersebut.</p>
+        </div>`,
+        confirmButtonColor: '#075e54',
+      });
+    } finally {
+      setIsSyncingAccess(false);
+    }
+  };
+
+  const handleRemoveStaffEmail = async (email: string) => {
+    if (!firebaseUser?.uid) return;
+    const lowerTarget = email.trim().toLowerCase();
+    const nextAllowed = buildAllowedEmails(
+      firebaseUser.email,
+      allowedEmailsForDocs.filter((e) => e.toLowerCase() !== lowerTarget)
+    );
+    setIsSyncingAccess(true);
+    try {
+      await deleteStaffAccessEmail(email);
+      await syncAllowedEmailsAcrossAllCollections({
+        allowedEmails: nextAllowed,
+        userEmail: firebaseUser.email || BOOTSTRAPPED_ADMIN_EMAIL,
+      });
+    } finally {
+      setIsSyncingAccess(false);
+    }
+  };
+
+  const handleSyncStaffAccessNow = async () => {
+    if (!firebaseUser?.email) return;
+    setIsSyncingAccess(true);
+    try {
+      const { updatedCount } = await syncAllowedEmailsAcrossAllCollections({
+        allowedEmails: allowedEmailsForDocs,
+        userEmail: firebaseUser.email,
+      });
+      await Swal.fire({
+        icon: 'success',
+        title: 'Akses Data Cloud Diselaraskan!',
+        text: `${updatedCount} dokumen lama diperbarui hak aksesnya untuk seluruh email tim terdaftar (${allowedEmailsForDocs.length} akun).`,
+        confirmButtonColor: '#075e54',
+      });
+    } finally {
+      setIsSyncingAccess(false);
+    }
+  };
+
+  if (!authReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#FAF8F2] p-6">
+        <div className="bg-white rounded-3xl p-8 shadow-sm border border-slate-200 text-center max-w-sm w-full space-y-3">
+          <div className="w-14 h-14 mx-auto rounded-2xl bg-emerald-50 flex items-center justify-center">
+            <Cloud className="w-7 h-7 text-[#075e54] animate-pulse" />
+          </div>
+          <p className="text-sm font-bold text-slate-800">
+            Menghubungkan Database Cloud...
+          </p>
+          <p className="text-xs text-slate-500">
+            Memeriksa sesi akun Google Pesantren Al-Andalus
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!firebaseUser) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#FAF8F2] p-4 sm:p-6">
+        <div className="bg-white rounded-3xl p-6 sm:p-8 shadow-lg border border-emerald-200/80 max-w-md w-full space-y-6 text-center">
+          <div className="w-20 h-20 mx-auto rounded-2xl bg-stone-50 border border-slate-200 p-2 flex items-center justify-center">
+            <img
+              src={LOGO_URL}
+              alt="Logo Pesantren Islam Internasional Al-Andalus"
+              className="w-full h-full object-contain"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-50 text-emerald-800 text-[11px] font-bold border border-emerald-200">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Database Cloud Real-Time &amp; Mirror Spreadsheet</span>
+            </div>
+            <h1 className="text-lg font-extrabold text-slate-900 pt-1">
+              Portal Bidang Pengasuhan Al-Andalus
+            </h1>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Masuk dengan akun Google resmi Pesantren agar seluruh catatan sakit, perizinan, dan rekap sholat tersinkronisasi <strong>real-time</strong> dalam hitungan milidetik sekaligus tetap tersalin ke Google Spreadsheet.
+            </p>
+          </div>
+
+          {authErrorMsg && (
+            <div className="rounded-2xl bg-rose-50 border border-rose-200 p-3 text-left text-xs text-rose-800">
+              {authErrorMsg}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={handleGoogleSignIn}
+            disabled={isLoggingInGoogle}
+            className="w-full min-h-[48px] px-5 py-3 rounded-2xl bg-[#075e54] hover:bg-[#054c42] text-white text-sm font-bold shadow-sm transition flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-60"
+          >
+            <Cloud className="w-5 h-5" />
+            <span>
+              {isLoggingInGoogle
+                ? 'Membuka Login Google...'
+                : 'Masuk dengan Akun Google'}
+            </span>
+          </button>
+
+          <p className="text-[11px] text-slate-500">
+            Gunakan akun <code className="font-mono text-slate-700">{BOOTSTRAPPED_ADMIN_EMAIL}</code> atau Gmail tim yang telah didaftarkan Admin Pusat.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const isUnauthorizedEmailWaiting =
+    firestoreReady &&
+    staffAccessLoaded &&
+    !isBootstrappedOrListedStaff &&
+    masterData.length === 0 &&
+    sholatList.length === 0 &&
+    laporanList.length === 0 &&
+    perizinanList.length === 0 &&
+    usersRoleList.length === 0;
+
+  if (isUnauthorizedEmailWaiting) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#FAF8F2] p-4 sm:p-6">
+        <div className="bg-white rounded-3xl p-6 sm:p-8 shadow-lg border border-amber-200 max-w-md w-full space-y-5 text-center">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-50 border border-amber-200 p-2 flex items-center justify-center">
+            <img
+              src={LOGO_URL}
+              alt="Logo Pesantren Islam Internasional Al-Andalus"
+              className="w-full h-full object-contain"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-100 text-amber-900 text-[11px] font-bold">
+              Menunggu Pendaftaran Email Tim
+            </span>
+            <h1 className="text-base font-extrabold text-slate-900 pt-1">
+              Email Belum Terdaftar di Portal Cloud
+            </h1>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Anda masuk menggunakan akun <strong className="text-slate-900">{firebaseUser.email}</strong>. Akun ini belum ditambahkan ke daftar tim oleh Admin Pusat (<code className="font-mono">{BOOTSTRAPPED_ADMIN_EMAIL}</code>).
+            </p>
+          </div>
+          <div className="rounded-2xl bg-slate-50 border border-slate-200 p-3.5 text-left text-[11px] text-slate-600 space-y-1">
+            <p className="font-bold text-slate-800">Cara Mengaktifkan Akun Ini:</p>
+            <p>1. Minta Admin Pusat membuka menu <strong>⚙️ Koneksi Sheet &amp; Code.gs</strong>.</p>
+            <p>2. Tambahkan email <code className="font-mono text-slate-900">{firebaseUser.email}</code> pada kolom <strong>Daftar Email Google Tim</strong>.</p>
+            <p>3. Setelah ditambahkan, klik tombol <strong>Cek Ulang Akses</strong> di bawah.</p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-2.5">
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="flex-1 min-h-[44px] px-4 py-2.5 rounded-xl bg-[#075e54] hover:bg-[#054c42] text-white text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span>Cek Ulang Akses</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => signOutFirebase()}
+              className="flex-1 min-h-[44px] px-4 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Ganti Akun Google</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-[#FAF8F2] text-slate-900">
@@ -841,7 +1290,6 @@ export default function App() {
             lastSyncTime={lastSyncTime}
             onQuickSync={() => executeSyncUKP(true)}
             onSyncNow={gasWebAppUrl ? () => pullFromGasSheets(gasWebAppUrl, true, false) : undefined}
-            onSilentSync={gasWebAppUrl ? () => pullFromGasSheets(gasWebAppUrl, false, true) : undefined}
             isSyncing={isSyncingGas}
             onSubmitLaporan={handleSubmitLaporan}
             logoUrl={LOGO_URL}
@@ -987,7 +1435,14 @@ export default function App() {
                     {activeMusyrif?.namaMusyrif || (userRole === 'ADMIN_PENGASUHAN' ? 'Admin Pengasuhan' : 'Admin Pusat / SDM')}
                   </p>
                   <p className="text-[10px] text-emerald-200 truncate">
-                    {userRole === 'ADMIN_PENGASUHAN' ? 'Online · Pengasuhan Al-Andalus' : 'Online · Akses Penuh SDM & Pusat'}
+                    ☁️ Cloud Real-Time ({firebaseUser.email})
+                    {gasWebAppUrl
+                      ? mirrorStatus === 'syncing'
+                        ? ' · Mirror Sheet...'
+                        : mirrorStatus === 'queued'
+                        ? ' · Sheet tertunda'
+                        : ' · Mirror Sheet Aktif'
+                      : ''}
                   </p>
                 </div>
               </div>
@@ -998,14 +1453,14 @@ export default function App() {
                     type="button"
                     onClick={() => pullFromGasSheets(gasWebAppUrl, true, false)}
                     disabled={isSyncingGas}
-                    title={`Tarik data terbaru dari semua Admin (${lastSyncTime || '-'})`}
+                    title={`Tarik data dari Spreadsheet & simpan ke Cloud (${lastSyncTime || '-'})`}
                     className="px-3 py-1.5 rounded-xl bg-emerald-700/70 hover:bg-emerald-600 text-white text-[11px] font-semibold transition flex items-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-60"
                   >
                     <RefreshCw
                       className={`w-3.5 h-3.5 ${isSyncingGas ? 'animate-spin' : ''}`}
                     />
                     <span className="hidden sm:inline">
-                      {isSyncingGas ? 'Menyinkronkan...' : 'Sinkronkan'}
+                      {isSyncingGas ? 'Menarik Sheet...' : 'Impor Sheet'}
                     </span>
                   </button>
                 )}
@@ -1031,7 +1486,16 @@ export default function App() {
                   className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold transition flex items-center gap-1 shrink-0 cursor-pointer"
                 >
                   <UserCheck className="w-3.5 h-3.5 text-white" />
-                  <span>Keluar</span>
+                  <span>Ganti Peran</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => signOutFirebase()}
+                  title={`Keluar akun Google (${firebaseUser.email})`}
+                  className="px-2.5 py-1.5 rounded-xl bg-rose-900/50 hover:bg-rose-800/80 text-white text-[11px] font-semibold transition flex items-center gap-1 shrink-0 cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
@@ -1202,7 +1666,6 @@ export default function App() {
                   onDateRangeChange={setDateRange}
                   lastSyncTime={lastSyncTime}
                   onQuickSync={() => executeSyncUKP(true)}
-                  onSilentSync={gasWebAppUrl ? () => pullFromGasSheets(gasWebAppUrl, false, true) : undefined}
                   onPullByDateRange={(range) => handlePullDataByDateRange(range, 'all')}
                   isSyncing={isSyncingGas}
                   mode="FULL"
@@ -1232,7 +1695,6 @@ export default function App() {
                   onExtendPerizinan={handleExtendPerizinan}
                   onDeletePerizinan={handleDeletePerizinan}
                   onSyncNow={gasWebAppUrl ? () => pullFromGasSheets(gasWebAppUrl, true, false) : undefined}
-                  onSilentSync={gasWebAppUrl ? () => pullFromGasSheets(gasWebAppUrl, false, true) : undefined}
                   onPullByDateRange={(range) => handlePullDataByDateRange(range, 'perizinan')}
                   isSyncing={isSyncingGas}
                   lastSyncTime={lastSyncTime}
@@ -1255,7 +1717,10 @@ export default function App() {
                 <RekapSholatPanel
                   masterData={masterData}
                   sholatList={sholatList}
+                  perizinanList={perizinanList}
+                  laporanList={laporanList}
                   onAddSholat={handleAddSholat}
+                  onAddSholatBatch={handleAddSholatBatch}
                   onDeleteSholat={handleDeleteSholat}
                   onResetSholatRange={handleResetSholatRange}
                   usersRoleList={usersRoleList}
@@ -1263,7 +1728,6 @@ export default function App() {
                   onDateRangeChange={setDateRange}
                   activeMusyrifName={activeMusyrif?.namaMusyrif || (userRole === 'ADMIN_PENGASUHAN' ? 'Admin Pengasuhan' : 'Admin Pusat')}
                   onSyncNow={gasWebAppUrl ? () => pullFromGasSheets(gasWebAppUrl, true, false) : undefined}
-                  onSilentSync={gasWebAppUrl ? () => pullFromGasSheets(gasWebAppUrl, false, true) : undefined}
                   onPullByDateRange={(range) => handlePullDataByDateRange(range, 'sholat')}
                   isSyncing={isSyncingGas}
                   lastSyncTime={lastSyncTime}
@@ -1331,6 +1795,12 @@ export default function App() {
                   onPullFromGasNow={async () => {
                     await pullFromGasSheets(gasWebAppUrl, true);
                   }}
+                  firebaseUserEmail={firebaseUser.email}
+                  staffAccessList={staffAccessList}
+                  isSyncingAccess={isSyncingAccess}
+                  onSyncStaffAccessNow={handleSyncStaffAccessNow}
+                  onAddStaffEmail={handleAddStaffEmail}
+                  onRemoveStaffEmail={handleRemoveStaffEmail}
                 />
               </div>
             )}

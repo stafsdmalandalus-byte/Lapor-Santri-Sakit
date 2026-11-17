@@ -1,0 +1,394 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 4.1: Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Pillar 3: Reusable Hardened Primitives ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedUser()
+        && request.auth.token.email is string
+        && request.auth.token.email.lower() == 'stafsdm.alandalus@gmail.com';
+    }
+
+    function staffAccessDocPath() {
+      return /databases/$(database)/documents/staff_access/$(request.auth.token.email.lower().replace('[^a-z0-9]+', '_'));
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerifiedUser() && (
+          exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+          (
+            request.auth.token.email is string &&
+            exists(staffAccessDocPath()) &&
+            get(staffAccessDocPath()).data.role in ['admin_pusat', 'admin_pengasuhan']
+          )
+        )
+      );
+    }
+
+    function isAllowedEmailList(listVal) {
+      return listVal is list
+        && listVal.size() >= 1
+        && listVal.size() <= 30
+        && listVal[0] is string
+        && listVal[0].size() <= 160;
+    }
+
+    function hasAuthorizedEmailAccess(data) {
+      return isBootstrappedAdmin()
+        || data.ownerUid == request.auth.uid
+        || (
+          request.auth.token.email is string
+          && 'allowedEmails' in data
+          && request.auth.token.email.lower() in data.allowedEmails
+        );
+    }
+
+    function isValidPrayerStatus(val) {
+      return val is string && val.size() <= 16 && val in ['TEPAT', 'TELAT', 'ALFA', 'IZIN'];
+    }
+
+    // --- Entity Validation Blueprints (Anti-Update-Gap) ---
+    function isValidAdminAccount(data) {
+      return data.keys().hasAll(['uid', 'email', 'ownerUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'ownerUid', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 120))
+        && isValidId(data.ownerUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStaffAccess(data) {
+      return data.keys().hasAll(['email', 'role', 'ownerUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['email', 'nama', 'role', 'ownerUid', 'allowedEmails', 'createdAt', 'updatedAt'])
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && (!('nama' in data) || (data.nama is string && data.nama.size() <= 120))
+        && data.role is string && data.role.size() <= 32 && data.role in ['admin_pusat', 'admin_pengasuhan', 'user']
+        && isValidId(data.ownerUid)
+        && (!('allowedEmails' in data) || isAllowedEmailList(data.allowedEmails))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMasterSantri(data) {
+      return data.keys().hasAll(['idSantri', 'namaSantri', 'kelas', 'kamar', 'ownerUid', 'allowedEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['idSantri', 'namaSantri', 'kelas', 'kamar', 'gedung', 'pengasuh1', 'pengasuh2', 'ownerUid', 'allowedEmails', 'createdAt', 'updatedAt'])
+        && isValidId(data.idSantri) && data.idSantri.size() <= 64
+        && data.namaSantri is string && data.namaSantri.size() >= 1 && data.namaSantri.size() <= 160
+        && data.kelas is string && data.kelas.size() <= 40
+        && data.kamar is string && data.kamar.size() <= 120
+        && (!('gedung' in data) || (data.gedung is string && data.gedung.size() <= 120))
+        && (!('pengasuh1' in data) || (data.pengasuh1 is string && data.pengasuh1.size() <= 120))
+        && (!('pengasuh2' in data) || (data.pengasuh2 is string && data.pengasuh2.size() <= 120))
+        && isValidId(data.ownerUid)
+        && isAllowedEmailList(data.allowedEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserRoleCredential(data) {
+      return data.keys().hasAll(['namaUser', 'role', 'password', 'keterangan', 'ownerUid', 'allowedEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['namaUser', 'role', 'password', 'keterangan', 'ownerUid', 'allowedEmails', 'createdAt', 'updatedAt'])
+        && data.namaUser is string && data.namaUser.size() >= 1 && data.namaUser.size() <= 120
+        && data.role is string && data.role.size() <= 32 && data.role in ['admin_pusat', 'admin_pengasuhan', 'admin', 'user']
+        && data.password is string && data.password.size() <= 128
+        && data.keterangan is string && data.keterangan.size() <= 200
+        && isValidId(data.ownerUid)
+        && isAllowedEmailList(data.allowedEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLaporanMusyrif(data) {
+      return data.keys().hasAll(['idLaporan', 'tanggalLaporan', 'musrifPelapor', 'namaSantri', 'keluhanUtama', 'statusPenanganan', 'ownerUid', 'allowedEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['idLaporan', 'timestamp', 'tanggalLaporan', 'musrifPelapor', 'idSantri', 'namaSantri', 'kelas', 'kamar', 'keluhanUtama', 'statusPenanganan', 'tindakanUKP', 'waktuUpdate', 'ownerUid', 'allowedEmails', 'createdAt', 'updatedAt'])
+        && isValidId(data.idLaporan) && data.idLaporan.size() <= 80
+        && (!('timestamp' in data) || (data.timestamp is string && data.timestamp.size() <= 64))
+        && data.tanggalLaporan is string && data.tanggalLaporan.size() <= 32
+        && data.musrifPelapor is string && data.musrifPelapor.size() <= 120
+        && (!('idSantri' in data) || (data.idSantri is string && data.idSantri.size() <= 64))
+        && data.namaSantri is string && data.namaSantri.size() >= 1 && data.namaSantri.size() <= 160
+        && (!('kelas' in data) || (data.kelas is string && data.kelas.size() <= 40))
+        && (!('kamar' in data) || (data.kamar is string && data.kamar.size() <= 120))
+        && data.keluhanUtama is string && data.keluhanUtama.size() <= 500
+        && data.statusPenanganan is string && data.statusPenanganan.size() <= 240
+        && (!('tindakanUKP' in data) || (data.tindakanUKP is string && data.tindakanUKP.size() <= 300))
+        && (!('waktuUpdate' in data) || (data.waktuUpdate is string && data.waktuUpdate.size() <= 64))
+        && isValidId(data.ownerUid)
+        && isAllowedEmailList(data.allowedEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDataUKP(data) {
+      return data.keys().hasAll(['idRow', 'tanggalPemeriksaan', 'namaSantri', 'tindakan', 'ownerUid', 'allowedEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['idRow', 'tanggalPemeriksaan', 'namaSantri', 'tindakan', 'ownerUid', 'allowedEmails', 'createdAt', 'updatedAt'])
+        && isValidId(data.idRow) && data.idRow.size() <= 80
+        && data.tanggalPemeriksaan is string && data.tanggalPemeriksaan.size() <= 32
+        && data.namaSantri is string && data.namaSantri.size() >= 1 && data.namaSantri.size() <= 160
+        && data.tindakan is string && data.tindakan.size() <= 300
+        && isValidId(data.ownerUid)
+        && isAllowedEmailList(data.allowedEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPerizinanPulang(data) {
+      return data.keys().hasAll(['idPerizinan', 'no', 'nama', 'dariTanggal', 'sampaiTanggal', 'ownerUid', 'allowedEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'idPerizinan', 'no', 'nama', 'kelas', 'gedung', 'kamar', 'izin', 'keterangan',
+          'tujuan', 'rekomendasi', 'dariTanggal', 'dariHari', 'dariJam', 'sampaiTanggal',
+          'sampaiHari', 'sampaiJam', 'durasi', 'bulan', 'pengasuh1', 'pengasuh2',
+          'walikelas', 'tibaTanggal', 'keteranganTiba', 'isExtended', 'sampaiTanggalAwal',
+          'alasanPerpanjangan', 'perpanjanganKe', 'ownerUid', 'allowedEmails', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.idPerizinan) && data.idPerizinan.size() <= 80
+        && data.no is string && data.no.size() <= 32
+        && data.nama is string && data.nama.size() >= 1 && data.nama.size() <= 160
+        && (!('kelas' in data) || (data.kelas is string && data.kelas.size() <= 40))
+        && (!('gedung' in data) || (data.gedung is string && data.gedung.size() <= 120))
+        && (!('kamar' in data) || (data.kamar is string && data.kamar.size() <= 120))
+        && (!('izin' in data) || (data.izin is string && data.izin.size() <= 120))
+        && (!('keterangan' in data) || (data.keterangan is string && data.keterangan.size() <= 400))
+        && (!('tujuan' in data) || (data.tujuan is string && data.tujuan.size() <= 240))
+        && (!('rekomendasi' in data) || (data.rekomendasi is string && data.rekomendasi.size() <= 120))
+        && data.dariTanggal is string && data.dariTanggal.size() <= 32
+        && (!('dariHari' in data) || (data.dariHari is string && data.dariHari.size() <= 32))
+        && (!('dariJam' in data) || (data.dariJam is string && data.dariJam.size() <= 20))
+        && data.sampaiTanggal is string && data.sampaiTanggal.size() <= 32
+        && (!('sampaiHari' in data) || (data.sampaiHari is string && data.sampaiHari.size() <= 32))
+        && (!('sampaiJam' in data) || (data.sampaiJam is string && data.sampaiJam.size() <= 20))
+        && (!('durasi' in data) || (data.durasi is string && data.durasi.size() <= 40))
+        && (!('bulan' in data) || (data.bulan is string && data.bulan.size() <= 32))
+        && (!('pengasuh1' in data) || (data.pengasuh1 is string && data.pengasuh1.size() <= 120))
+        && (!('pengasuh2' in data) || (data.pengasuh2 is string && data.pengasuh2.size() <= 120))
+        && (!('walikelas' in data) || (data.walikelas is string && data.walikelas.size() <= 120))
+        && (!('tibaTanggal' in data) || (data.tibaTanggal is string && data.tibaTanggal.size() <= 32))
+        && (!('keteranganTiba' in data) || (data.keteranganTiba is string && data.keteranganTiba.size() <= 300))
+        && (!('isExtended' in data) || (data.isExtended is bool))
+        && (!('sampaiTanggalAwal' in data) || (data.sampaiTanggalAwal is string && data.sampaiTanggalAwal.size() <= 32))
+        && (!('alasanPerpanjangan' in data) || (data.alasanPerpanjangan is string && data.alasanPerpanjangan.size() <= 300))
+        && (!('perpanjanganKe' in data) || (data.perpanjanganKe is number))
+        && isValidId(data.ownerUid)
+        && isAllowedEmailList(data.allowedEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSholatRecord(data) {
+      return data.keys().hasAll(['idSholat', 'tanggal', 'namaSantri', 'subuh', 'dzuhur', 'ashar', 'maghrib', 'isya', 'pencatat', 'keterangan', 'ownerUid', 'allowedEmails', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'idSholat', 'tanggal', 'nis', 'namaSantri', 'kelas', 'gedung', 'kamar',
+          'subuh', 'dzuhur', 'ashar', 'maghrib', 'isya', 'pencatat', 'timestamp',
+          'keterangan', 'ownerUid', 'allowedEmails', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.idSholat) && data.idSholat.size() <= 80
+        && data.tanggal is string && data.tanggal.size() >= 8 && data.tanggal.size() <= 32
+        && (!('nis' in data) || (data.nis is string && data.nis.size() <= 64))
+        && data.namaSantri is string && data.namaSantri.size() >= 1 && data.namaSantri.size() <= 160
+        && (!('kelas' in data) || (data.kelas is string && data.kelas.size() <= 40))
+        && (!('gedung' in data) || (data.gedung is string && data.gedung.size() <= 120))
+        && (!('kamar' in data) || (data.kamar is string && data.kamar.size() <= 120))
+        && isValidPrayerStatus(data.subuh)
+        && isValidPrayerStatus(data.dzuhur)
+        && isValidPrayerStatus(data.ashar)
+        && isValidPrayerStatus(data.maghrib)
+        && isValidPrayerStatus(data.isya)
+        && data.pencatat is string && data.pencatat.size() <= 240
+        && (!('timestamp' in data) || (data.timestamp is string && data.timestamp.size() <= 64))
+        && data.keterangan is string && data.keterangan.size() <= 240
+        && isValidId(data.ownerUid)
+        && isAllowedEmailList(data.allowedEmails)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+    match /test/connection {
+      allow get: if isSignedIn();
+    }
+
+    match /admins/{uid} {
+      allow get: if isVerifiedUser() && isValidId(uid) && (isBootstrappedAdmin() || uid == request.auth.uid);
+      allow list: if isVerifiedUser() && (isBootstrappedAdmin() || existing().uid == request.auth.uid);
+      allow create: if isBootstrappedAdmin() && isValidId(uid) && isValidAdminAccount(incoming())
+        && incoming().uid == uid
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isBootstrappedAdmin() && isValidId(uid) && isValidAdminAccount(incoming())
+        && incoming().uid == existing().uid
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'displayName', 'updatedAt']);
+      allow delete: if isBootstrappedAdmin() && isValidId(uid);
+    }
+
+    match /staff_access/{emailKey} {
+      allow get: if isVerifiedUser() && isValidId(emailKey) && (isAdmin() || (request.auth.token.email is string && existing().email == request.auth.token.email.lower()));
+      allow list: if isVerifiedUser() && (isBootstrappedAdmin() || existing().ownerUid == request.auth.uid || (request.auth.token.email is string && existing().email == request.auth.token.email.lower()) || (request.auth.token.email is string && 'allowedEmails' in existing() && request.auth.token.email.lower() in existing().allowedEmails));
+      allow create: if isAdmin() && isValidId(emailKey) && isValidStaffAccess(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin() && isValidId(emailKey) && isValidStaffAccess(incoming())
+        && incoming().email == existing().email
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['nama', 'role', 'allowedEmails', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(emailKey);
+    }
+
+    match /master_santri/{santriDocId} {
+      allow get: if isVerifiedUser() && isValidId(santriDocId) && (isAdmin() || hasAuthorizedEmailAccess(existing()));
+      allow list: if isVerifiedUser() && hasAuthorizedEmailAccess(existing());
+      allow create: if isAdmin() && isValidId(santriDocId) && isValidMasterSantri(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin() && isValidId(santriDocId) && isValidMasterSantri(incoming())
+        && incoming().idSantri == existing().idSantri
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['namaSantri', 'kelas', 'kamar', 'gedung', 'pengasuh1', 'pengasuh2', 'allowedEmails', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(santriDocId);
+    }
+
+    match /users_role/{userDocId} {
+      allow get: if isVerifiedUser() && isValidId(userDocId) && (isAdmin() || hasAuthorizedEmailAccess(existing()));
+      allow list: if isVerifiedUser() && hasAuthorizedEmailAccess(existing());
+      allow create: if isAdmin() && isValidId(userDocId) && isValidUserRoleCredential(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin() && isValidId(userDocId) && isValidUserRoleCredential(incoming())
+        && incoming().namaUser == existing().namaUser
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'password', 'keterangan', 'allowedEmails', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(userDocId);
+    }
+
+    match /laporan_musyrif/{laporanId} {
+      allow get: if isVerifiedUser() && isValidId(laporanId) && (isAdmin() || hasAuthorizedEmailAccess(existing()));
+      allow list: if isVerifiedUser() && hasAuthorizedEmailAccess(existing());
+      allow create: if isVerifiedUser() && isValidId(laporanId) && isValidLaporanMusyrif(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isAdmin() || (request.auth.token.email is string && request.auth.token.email.lower() in incoming().allowedEmails));
+      allow update: if isVerifiedUser() && isValidId(laporanId) && isValidLaporanMusyrif(incoming())
+        && incoming().idLaporan == existing().idLaporan
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            hasAuthorizedEmailAccess(existing()) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['statusPenanganan', 'tindakanUKP', 'waktuUpdate', 'updatedAt'])
+          )
+        );
+      allow delete: if isVerifiedUser() && isValidId(laporanId) && (isAdmin() || existing().ownerUid == request.auth.uid);
+    }
+
+    match /data_ukp/{ukpDocId} {
+      allow get: if isVerifiedUser() && isValidId(ukpDocId) && (isAdmin() || hasAuthorizedEmailAccess(existing()));
+      allow list: if isVerifiedUser() && hasAuthorizedEmailAccess(existing());
+      allow create: if isAdmin() && isValidId(ukpDocId) && isValidDataUKP(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin() && isValidId(ukpDocId) && isValidDataUKP(incoming())
+        && incoming().idRow == existing().idRow
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['tanggalPemeriksaan', 'namaSantri', 'tindakan', 'allowedEmails', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(ukpDocId);
+    }
+
+    match /perizinan_pulang/{perizinanId} {
+      allow get: if isVerifiedUser() && isValidId(perizinanId) && (isAdmin() || hasAuthorizedEmailAccess(existing()));
+      allow list: if isVerifiedUser() && hasAuthorizedEmailAccess(existing());
+      allow create: if isVerifiedUser() && isValidId(perizinanId) && isValidPerizinanPulang(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isAdmin() || (request.auth.token.email is string && request.auth.token.email.lower() in incoming().allowedEmails));
+      allow update: if isVerifiedUser() && isValidId(perizinanId) && isValidPerizinanPulang(incoming())
+        && incoming().idPerizinan == existing().idPerizinan
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            hasAuthorizedEmailAccess(existing()) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'tibaTanggal', 'keteranganTiba', 'sampaiTanggal', 'sampaiHari', 'sampaiJam',
+              'durasi', 'isExtended', 'sampaiTanggalAwal', 'alasanPerpanjangan', 'perpanjanganKe', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isVerifiedUser() && isValidId(perizinanId) && (isAdmin() || existing().ownerUid == request.auth.uid);
+    }
+
+    match /sholat_records/{sholatId} {
+      allow get: if isVerifiedUser() && isValidId(sholatId) && (isAdmin() || hasAuthorizedEmailAccess(existing()));
+      allow list: if isVerifiedUser() && hasAuthorizedEmailAccess(existing());
+      allow create: if isVerifiedUser() && isValidId(sholatId) && isValidSholatRecord(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isAdmin() || (request.auth.token.email is string && request.auth.token.email.lower() in incoming().allowedEmails));
+      allow update: if isVerifiedUser() && isValidId(sholatId) && isValidSholatRecord(incoming())
+        && incoming().idSholat == existing().idSholat
+        && incoming().tanggal == existing().tanggal
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            hasAuthorizedEmailAccess(existing()) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'subuh', 'dzuhur', 'ashar', 'maghrib', 'isya', 'pencatat', 'timestamp', 'keterangan', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isVerifiedUser() && isValidId(sholatId) && (isAdmin() || existing().ownerUid == request.auth.uid);
+    }
+  }
+}
