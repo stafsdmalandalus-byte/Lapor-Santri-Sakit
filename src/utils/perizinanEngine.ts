@@ -781,7 +781,8 @@ export function searchSantriForPerizinan(
   const seenKeys = new Set<string>();
 
   // Utamakan 100% daftar santri dari sheet Master_Data (sama seperti fitur Izin Sakit)
-  for (const m of masterData) {
+  const safeMaster = Array.isArray(masterData) ? masterData : [];
+  for (const m of safeMaster) {
     const cleanName = cleanDisplayName(m.namaSantri);
     const key = normalizePersonName(cleanName);
     if (!key || seenKeys.has(key)) continue;
@@ -1411,13 +1412,14 @@ export function filterPerizinanByDateAndName(
   range: DateRangeFilter,
   nameQuery: string
 ): PerizinanRow[] {
+  const safeRows = Array.isArray(rows) ? rows : [];
   const { start, end } = normalizeDateRangeBounds({
     startDate: normalizePerizinanDate(range.startDate),
     endDate: normalizePerizinanDate(range.endDate),
   });
   const q = normalizePersonName(nameQuery);
 
-  return rows.filter((row) => {
+  return safeRows.filter((row) => {
     const tgl = normalizePerizinanDate(row.dariTanggal);
     if (start && (!tgl || tgl < start)) return false;
     if (end && (!tgl || tgl > end)) return false;
@@ -1467,12 +1469,13 @@ export function generatePerizinanWhatsAppReport(
   phoneNumber: string = '',
   todayISO: string = getTodayDateISO()
 ): PerizinanWhatsAppReport {
+  const safeRows = Array.isArray(rows) ? rows : [];
   const cleanDate = normalizePerizinanDate(targetDate);
   const formattedDate = cleanDate
     ? formatTanggalIndo(cleanDate)
     : formatTanggalIndo(todayISO);
 
-  const includedRows = rows.filter((r) => {
+  const includedRows = safeRows.filter((r) => {
     const st = getPerizinanStatus(r, todayISO);
     if (filterMode === 'ACTIVE_ONLY') {
       return st !== 'RETURNED';

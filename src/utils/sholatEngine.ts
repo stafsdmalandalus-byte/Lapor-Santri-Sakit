@@ -129,11 +129,12 @@ export function findExistingSholatRecordForDate(
   tanggal: string,
   namaSantri: string
 ): SholatRow | null {
+  const safeList = Array.isArray(list) ? list : [];
   const targetDate = normalizeDateYYYYMMDD(tanggal || '');
   const targetName = normalizeSantriKey(namaSantri);
   if (!targetDate || !targetName) return null;
 
-  const matchingRows = list.filter(
+  const matchingRows = safeList.filter(
     (r) =>
       !isSholatRowPutih(r) &&
       getEffectiveSholatDate(r) === targetDate &&
@@ -246,10 +247,11 @@ export function filterSholatByDateRange(
   list: SholatRow[],
   range: { startDate: string; endDate: string }
 ): SholatRow[] {
+  const safeList = Array.isArray(list) ? list : [];
   const { start, end } = normalizeDateRangeBounds(range);
-  if (!start && !end) return list;
+  if (!start && !end) return safeList;
 
-  return list.filter((row) => {
+  return safeList.filter((row) => {
     const tgl = getEffectiveSholatDate(row);
     if (!tgl || !/^\d{4}-\d{2}-\d{2}$/.test(tgl)) return false;
     if (start && tgl < start) return false;

@@ -36,6 +36,20 @@ export function saveSessionToken(token: string): void {
   }
 }
 
+export class ServerApiUnavailableError extends Error {
+  constructor(message: string = 'SERVER_API_UNAVAILABLE') {
+    super(message);
+    this.name = 'ServerApiUnavailableError';
+  }
+}
+
+export function isServerApiUnavailableError(err: unknown): boolean {
+  return (
+    err instanceof ServerApiUnavailableError ||
+    (err instanceof Error && err.message === 'SERVER_API_UNAVAILABLE')
+  );
+}
+
 async function apiFetch<T>(
   url: string,
   options: RequestInit = {}
@@ -55,16 +69,40 @@ async function apiFetch<T>(
     headers,
   });
 
-  const data = await res.json().catch(() => ({}));
+  const contentType = res.headers.get('content-type') || '';
+  const rawText = await res.text();
+  let data: unknown = null;
+
+  if (rawText) {
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      if (!contentType.includes('application/json')) {
+        throw new ServerApiUnavailableError('SERVER_API_UNAVAILABLE');
+      }
+      throw new Error(`Invalid JSON response (${res.status})`);
+    }
+  }
+
   if (!res.ok) {
+    if (res.status === 404 && !contentType.includes('application/json')) {
+      throw new ServerApiUnavailableError('SERVER_API_UNAVAILABLE');
+    }
+    const errObj =
+      data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
     throw new Error(
       String(
-        (data as Record<string, unknown>)?.error ||
-          (data as Record<string, unknown>)?.errorMessage ||
+        errObj.error ||
+          errObj.errorMessage ||
           `Request error (${res.status})`
       )
     );
   }
+
+  if (!data || typeof data !== 'object') {
+    throw new ServerApiUnavailableError('SERVER_API_UNAVAILABLE');
+  }
+
   return data as T;
 }
 
@@ -97,16 +135,33 @@ export interface BootstrapResponse {
 }
 
 export async function fetchDirectory(): Promise<DirectoryResponse> {
-  return apiFetch<DirectoryResponse>('/api/directory');
+  const res = await apiFetch<Partial<DirectoryResponse>>('/api/directory');
+  if (!Array.isArray(res.usersDirectory)) {
+    throw new ServerApiUnavailableError('SERVER_API_UNAVAILABLE');
+  }
+  return {
+    usersDirectory: res.usersDirectory,
+    storageMode: res.storageMode || 'fast_server_and_sheet',
+    hasGasUrl: Boolean(res.hasGasUrl),
+    lastSyncTime: res.lastSyncTime || '',
+  };
 }
 
 export async function checkServerSession(): Promise<{
   authenticated: boolean;
   user: ServerSessionInfo | null;
 }> {
-  return apiFetch<{ authenticated: boolean; user: ServerSessionInfo | null }>(
-    '/api/auth/session'
-  );
+  const res = await apiFetch<{
+    authenticated?: boolean;
+    user?: ServerSessionInfo | null;
+  }>('/api/auth/session');
+  if (typeof res.authenticated !== 'boolean') {
+    throw new ServerApiUnavailableError('SERVER_API_UNAVAILABLE');
+  }
+  return {
+    authenticated: res.authenticated,
+    user: res.user || null,
+  };
 }
 
 export async function loginWithNameAndPassword(
@@ -135,6 +190,9 @@ export async function loginWithNameAndPassword(
     }
     return res;
   } catch (err) {
+    if (isServerApiUnavailableError(err)) {
+      throw err;
+    }
     return {
       valid: false,
       errorMessage:
@@ -169,7 +227,23 @@ export async function verifyUserPasswordServer(
 }
 
 export async function fetchBootstrapData(): Promise<BootstrapResponse> {
-  return apiFetch<BootstrapResponse>('/api/bootstrap');
+  const res = await apiFetch<Partial<BootstrapResponse>>('/api/bootstrap');
+  if (!Array.isArray(res.masterData) && !Array.isArray(res.usersRoleList)) {
+    throw new ServerApiUnavailableError('SERVER_API_UNAVAILABLE');
+  }
+  return {
+    version: typeof res.version === 'number' ? res.version : 1,
+    gasWebAppUrl: typeof res.gasWebAppUrl === 'string' ? res.gasWebAppUrl : '',
+    lastSyncTime: typeof res.lastSyncTime === 'string' ? res.lastSyncTime : '',
+    mirrorStatus: res.mirrorStatus || 'idle',
+    storageMode: res.storageMode || 'fast_server_and_sheet',
+    masterData: Array.isArray(res.masterData) ? res.masterData : [],
+    laporanList: Array.isArray(res.laporanList) ? res.laporanList : [],
+    ukpList: Array.isArray(res.ukpList) ? res.ukpList : [],
+    perizinanList: Array.isArray(res.perizinanList) ? res.perizinanList : [],
+    sholatList: Array.isArray(res.sholatList) ? res.sholatList : [],
+    usersRoleList: Array.isArray(res.usersRoleList) ? res.usersRoleList : [],
+  };
 }
 
 export async function pullSheetToServer(): Promise<{

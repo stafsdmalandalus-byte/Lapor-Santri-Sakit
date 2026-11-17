@@ -116,7 +116,8 @@ export function searchUsersRoleByName(
   usersRoleList: UserRoleRow[],
   roleCategory?: 'user' | 'admin_pengasuhan' | 'admin_pusat'
 ): UserRoleRow[] {
-  const q = query.trim().toLowerCase();
+  const safeUsers = Array.isArray(usersRoleList) ? usersRoleList : [];
+  const q = String(query || '').trim().toLowerCase();
 
   const matchesRoleCategory = (u: UserRoleRow): boolean => {
     if (!roleCategory) return true;
@@ -134,12 +135,12 @@ export function searchUsersRoleByName(
   };
 
   if (!q) {
-    const byCategory = usersRoleList.filter(matchesRoleCategory);
-    return byCategory.length > 0 ? byCategory : usersRoleList;
+    const byCategory = safeUsers.filter(matchesRoleCategory);
+    return byCategory.length > 0 ? byCategory : safeUsers;
   }
 
-  const matched = usersRoleList.filter((u) => {
-    const displayNama = (u.nama || u.namaUser).toLowerCase();
+  const matched = safeUsers.filter((u) => {
+    const displayNama = (u.nama || u.namaUser || '').toLowerCase();
     const ket = (u.keterangan || '').toLowerCase();
     return displayNama.includes(q) || ket.includes(q);
   });
@@ -160,7 +161,8 @@ export function authenticateUserRole(
   user?: UserRoleRow;
   errorMessage?: string;
 } {
-  const cleanName = namaUserInput.trim().toLowerCase();
+  const safeUsers = Array.isArray(usersRoleList) ? usersRoleList : [];
+  const cleanName = String(namaUserInput || '').trim().toLowerCase();
   if (!cleanName) {
     return {
       valid: false,
@@ -169,13 +171,13 @@ export function authenticateUserRole(
     };
   }
 
-  let target = usersRoleList.find(
-    (u) => (u.nama || u.namaUser).trim().toLowerCase() === cleanName
+  let target = safeUsers.find(
+    (u) => (u.nama || u.namaUser || '').trim().toLowerCase() === cleanName
   );
 
   if (!target) {
-    const partialMatches = usersRoleList.filter((u) =>
-      (u.nama || u.namaUser).trim().toLowerCase().includes(cleanName)
+    const partialMatches = safeUsers.filter((u) =>
+      (u.nama || u.namaUser || '').trim().toLowerCase().includes(cleanName)
     );
     if (partialMatches.length === 1) {
       target = partialMatches[0];
@@ -499,14 +501,15 @@ export function searchMasterSantri(
   query: string,
   masterData: MasterSantri[]
 ): MasterSantri[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return masterData;
-  return masterData.filter(
+  const safeMaster = Array.isArray(masterData) ? masterData : [];
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return safeMaster;
+  return safeMaster.filter(
     (s) =>
-      s.namaSantri.toLowerCase().includes(q) ||
-      s.idSantri.toLowerCase().includes(q) ||
-      s.kelas.toLowerCase().includes(q) ||
-      s.kamar.toLowerCase().includes(q)
+      String(s.namaSantri || '').toLowerCase().includes(q) ||
+      String(s.idSantri || '').toLowerCase().includes(q) ||
+      String(s.kelas || '').toLowerCase().includes(q) ||
+      String(s.kamar || '').toLowerCase().includes(q)
   );
 }
 
@@ -722,9 +725,10 @@ export interface ReportOverviewStats {
 export function calculateReportOverview(
   laporanRows: LaporanMusyrifRow[]
 ): ReportOverviewStats {
-  const total = laporanRows.length;
-  const pending = laporanRows.filter(
-    (r) => r.statusPenanganan.trim().toUpperCase() === 'MENUNGGU PENANGANAN'
+  const safeRows = Array.isArray(laporanRows) ? laporanRows : [];
+  const total = safeRows.length;
+  const pending = safeRows.filter(
+    (r) => String(r.statusPenanganan || '').trim().toUpperCase() === 'MENUNGGU PENANGANAN'
   ).length;
   const resolved = total - pending;
   const resolutionRate = total > 0 ? Math.round((resolved / total) * 100) : 0;
@@ -804,13 +808,14 @@ export function filterLaporanByDateRange(
   laporanRows: LaporanMusyrifRow[],
   range: DateRangeFilter
 ): LaporanMusyrifRow[] {
+  const safeRows = Array.isArray(laporanRows) ? laporanRows : [];
   const { start, end } = normalizeDateRangeBounds(range);
 
   if (!start && !end) {
-    return laporanRows;
+    return safeRows;
   }
 
-  return laporanRows.filter((row) => {
+  return safeRows.filter((row) => {
     const tgl =
       normalizeDateYYYYMMDD(row.tanggalLaporan) ||
       normalizeDateYYYYMMDD(row.timestamp);
@@ -828,12 +833,13 @@ export function filterLaporanBySantriName(
   laporanRows: LaporanMusyrifRow[],
   query: string
 ): LaporanMusyrifRow[] {
+  const safeRows = Array.isArray(laporanRows) ? laporanRows : [];
   const cleanQuery = normalizePersonName(query);
   if (!cleanQuery) {
-    return laporanRows;
+    return safeRows;
   }
 
-  return laporanRows.filter((row) => {
+  return safeRows.filter((row) => {
     const nama = normalizePersonName(row.namaSantri);
     const id = String(row.idSantri || '').trim().toLowerCase();
     const kelas = String(row.kelas || '').trim().toLowerCase();
@@ -957,16 +963,17 @@ export interface MusyrifHandlingGroups {
 export function splitLaporanByHandlingStatus(
   laporanRows: LaporanMusyrifRow[]
 ): MusyrifHandlingGroups {
-  const belumTertangani = laporanRows.filter(
-    (r) => r.statusPenanganan.trim().toUpperCase() === 'MENUNGGU PENANGANAN'
+  const safeRows = Array.isArray(laporanRows) ? laporanRows : [];
+  const belumTertangani = safeRows.filter(
+    (r) => String(r.statusPenanganan || '').trim().toUpperCase() === 'MENUNGGU PENANGANAN'
   );
-  const sudahTertangani = laporanRows.filter(
-    (r) => r.statusPenanganan.trim().toUpperCase() !== 'MENUNGGU PENANGANAN'
+  const sudahTertangani = safeRows.filter(
+    (r) => String(r.statusPenanganan || '').trim().toUpperCase() !== 'MENUNGGU PENANGANAN'
   );
   return {
     belumTertangani,
     sudahTertangani,
-    total: laporanRows.length,
+    total: safeRows.length,
   };
 }
 
