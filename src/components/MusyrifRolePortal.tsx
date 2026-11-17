@@ -46,6 +46,10 @@ interface MusyrifRolePortalProps {
   onSilentSync?: () => void;
   isSyncing?: boolean;
   onSubmitLaporan: (input: LaporanInput) => Promise<{ idLaporan: string }>;
+  onLoginAttempt?: (
+    namaUser: string,
+    password: string
+  ) => Promise<{ valid: boolean; user?: UserRoleRow; errorMessage?: string }>;
   logoUrl: string;
 }
 
@@ -66,6 +70,7 @@ export const MusyrifRolePortal: React.FC<MusyrifRolePortalProps> = ({
   onSilentSync,
   isSyncing = false,
   onSubmitLaporan,
+  onLoginAttempt,
   logoUrl,
 }) => {
   const [namaSearchQuery, setNamaSearchQuery] = useState<string>('');
@@ -123,11 +128,9 @@ export const MusyrifRolePortal: React.FC<MusyrifRolePortalProps> = ({
     const targetNameInput = (selectedNamaUser || namaSearchQuery).trim();
     const cleanPass = passwordInput.trim();
 
-    const auth = authenticateUserRole(
-      targetNameInput,
-      cleanPass,
-      usersRoleList
-    );
+    const auth = onLoginAttempt
+      ? await onLoginAttempt(targetNameInput, cleanPass)
+      : authenticateUserRole(targetNameInput, cleanPass, usersRoleList);
 
     if (!auth.valid || !auth.user) {
       await Swal.fire({

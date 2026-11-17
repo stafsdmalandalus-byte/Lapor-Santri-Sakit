@@ -93,6 +93,7 @@ interface RekapSholatPanelProps {
   isSyncing?: boolean;
   lastSyncTime?: string | null;
   logoUrl?: string;
+  onVerifyPassword?: (password: string) => Promise<boolean>;
 }
 
 type PrayerKey = 'subuh' | 'dzuhur' | 'ashar' | 'maghrib' | 'isya';
@@ -124,6 +125,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
   isSyncing = false,
   lastSyncTime,
   logoUrl = '/assets/aistudio/Logo_Al-Andalus_c7d889d5.png',
+  onVerifyPassword,
 }) => {
   const [subTab, setSubTab] = useState<'input' | 'rekap'>('input');
 
@@ -776,11 +778,12 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
 
     if (!password) return;
 
-    const isValid =
-      (usersRoleList || []).some((u) => u.password === password) ||
-      password === '123456' ||
-      password === 'admin' ||
-      password === 'admin123';
+    const isValid = onVerifyPassword
+      ? await onVerifyPassword(password)
+      : (usersRoleList || []).some((u) => u.password === password) ||
+        password === '123456' ||
+        password === 'admin' ||
+        password === 'admin123';
 
     if (!isValid) {
       await Swal.fire({
@@ -1041,7 +1044,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                     Tidak ada santri yang cocok dengan pencarian/filter.
                   </p>
                 ) : (
-                  filteredSantri.map((santri) => {
+                  filteredSantri.map((santri, idx) => {
                     const key = normalizeSantriKey(santri.namaSantri);
                     const isChecked = selectedSantriMap.has(key);
                     const existingForItem = findExistingSholatRecordForDate(
@@ -1058,7 +1061,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
 
                     return (
                       <button
-                        key={santri.idSantri || santri.namaSantri}
+                        key={`${santri.idSantri || 'STD'}-${santri.namaSantri}-${idx}`}
                         type="button"
                         onClick={() => toggleSelectSantri(santri)}
                         className={`w-full text-left px-3.5 py-2.5 flex items-center justify-between gap-3 transition cursor-pointer ${
@@ -1122,9 +1125,9 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                     Santri Terpilih ({selectedSantriList.length}):
                   </p>
                   <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
-                    {selectedSantriList.map((s) => (
+                    {selectedSantriList.map((s, idx) => (
                       <span
-                        key={s.namaSantri}
+                        key={`${s.idSantri || 'SEL'}-${s.namaSantri}-${idx}`}
                         className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-100 text-emerald-900 border border-emerald-300 text-[11px] font-semibold"
                       >
                         <span>{s.namaSantri}</span>
@@ -1645,8 +1648,8 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                   {santriSummaryList.length === 0 ? (
                     <option value="">-- Belum ada santri di rentang ini --</option>
                   ) : (
-                    santriSummaryList.map((st) => (
-                      <option key={st.namaSantri} value={st.namaSantri}>
+                    santriSummaryList.map((st, idx) => (
+                      <option key={`${st.namaSantri}-${idx}`} value={st.namaSantri}>
                         {st.namaSantri} (Kelas {st.kelas} · {st.kamar}) — Total Telat: {st.totalTelat}x
                       </option>
                     ))
@@ -1719,7 +1722,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                         </tr>
                       ) : (
                         santriSummaryList.slice(0, 6).map((st, idx) => (
-                          <tr key={st.namaSantri}>
+                          <tr key={`${st.namaSantri}-${idx}`}>
                             <td className="p-2 font-mono text-slate-500">{idx + 1}</td>
                             <td className="p-2 font-bold text-slate-900">{st.namaSantri}</td>
                             <td className="p-2 text-slate-700">{st.kelas || '-'}</td>
@@ -1815,7 +1818,7 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
                   <tbody className="divide-y divide-slate-200/60 font-mono text-[11px]">
                     {santriSummaryList.map((st, idx) => (
                       <tr
-                        key={st.namaSantri}
+                        key={`${st.namaSantri}-${idx}`}
                         className="hover:bg-white transition"
                       >
                         <td className="p-2.5 font-bold text-slate-500">
@@ -1969,11 +1972,11 @@ export const RekapSholatPanel: React.FC<RekapSholatPanelProps> = ({
             </div>
           ) : (
             <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">
-              {rekapFilteredList.map((row) => {
+              {rekapFilteredList.map((row, idx) => {
                 const isPutih = isSholatRowPutih(row);
                 return (
                   <div
-                    key={row.idSholat}
+                    key={`${row.idSholat || 'SHOLAT'}-${idx}`}
                     className={`rounded-2xl border p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs shadow-xs transition ${
                       isPutih
                         ? 'bg-stone-50/90 border-amber-200/90 opacity-85'
